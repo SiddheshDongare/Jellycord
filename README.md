@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/logo.jpg" alt="Jellycord Logo" width="200"/>
+</p>
+
 # Jellycord: A JFA-GO Companion Bot
 
 [![Discord.py](https://img.shields.io/badge/discord.py-v2.3.2-blue.svg)](https://github.com/Rapptz/discord.py)
@@ -120,7 +124,7 @@ Deploying Jellycord with Docker is a convenient way to manage the application an
 
 **Recommended: Using the Pre-built Docker Image from Docker Hub**
 
-A pre-built image is available on Docker Hub: `sidikulous/jellycord:latest`.
+A pre-built image is available on Docker Hub: [sidikulous/jellycord:latest](https://hub.docker.com/repository/docker/sidikulous/jellycord).
 
 1.  **Prepare your host environment:**
     *   Create a dedicated directory for your Jellycord configuration and data. For example:
@@ -282,9 +286,21 @@ Once the bot is running and configured:
 3.  Ensure users who need to run commands have a role listed in `discord.command_authorized_roles`.
 4.  Available slash commands (exact behavior and output are configurable):
     *   `/create-trial-invite`: Creates a trial invite for a user in the current channel/thread (user is auto-detected).
+        <p align="center">
+          <img src="images/create_trial_invite_command.png" alt="Create Trial Invite Command Screenshot" width="600"/>
+        </p>
     *   `/create-user-invite [user] [plan_type] [months (optional)] [days (optional)]`: Creates a user invite for a specified Discord user, assigning them to a JFA-GO plan.
+        <p align="center">
+          <img src="images/create_user_invite_command.png" alt="Create User Invite Command Screenshot" width="600"/>
+        </p>
     *   `/remove_invite [user]`: Removes an invite record for a specified Discord user from Jellycord's database and attempts to revert their Discord roles. **Does not remove the user from JFA-GO.**
+        <p align="center">
+          <img src="images/remove_invite_command.png" alt="Remove Invite Command Screenshot" width="600"/>
+        </p>
     *   `/extend-plan [user] [jfa_username] [months/days/hours/minutes (at least one required)] [reason (optional)] [notify (optional)]`: Extends a user's JFA-GO plan.
+        <p align="center">
+          <img src="images/extend_plan_command.png" alt="Extend Plan Command Screenshot" width="600"/>
+        </p>
 
 ## Contributing
 
