@@ -1,0 +1,21 @@
+# Environment
+.venv
+venv/
+.env
+
+# Logs & Databases
+jfa_bot.log
+jfa_bot.db
+
+# Python cache/compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ruff_cache
+
+modules/__pycache__
+modules/commands/__pycache__
+
+config.yaml
+PROJECT.md

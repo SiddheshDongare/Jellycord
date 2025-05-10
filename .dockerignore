@@ -1,0 +1,30 @@
+# Git specific
+.git
+.gitignore
+
+# Docker specific
+Dockerfile
+.dockerignore
+
+# Documentation
+README.md
+
+# Environment
+.venv
+venv/
+.env
+
+# Logs & Databases
+jfa_bot.log
+jfa_bot.db
+
+# Python cache/compiled files
+__pycache__/
+*.py[cod]
+.ruff_cache
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+PROJECT.md
