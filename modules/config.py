@@ -84,7 +84,7 @@ DEFAULT_CONFIG_STRUCTURE = {
             "error": "0xdc3545",
             "info": "0x17a2b8",
             "warning": "0xffc107",
-            "blue": "0x007bff"  # Added blue as a default
+            "blue": "0x007bff",  # Added blue as a default
         },
         "embed_footer_text": "Powered by {bot_name}",
         "bot_display_name_in_messages": "JFA-GO Bot",
@@ -93,6 +93,9 @@ DEFAULT_CONFIG_STRUCTURE = {
         "expiry_check_fetch_days": 4,
         "expiry_notification_interval_days": 2,
         "notification_days_before_expiry": [3, 0],
+    },
+    "sync_settings": {  # New section for sync task configurations
+        "jfa_user_sync_interval_hours": 12,
     },
     "commands": {
         "create_trial_invite": {
@@ -163,6 +166,11 @@ EXPECTED_CONFIG: Dict[str, Tuple[type, bool, Any]] = {
     "notification_settings.expiry_check_fetch_days": (int, False, 4),
     "notification_settings.expiry_notification_interval_days": (int, False, 2),
     "notification_settings.notification_days_before_expiry": (list, False, [3, 0]),
+    "sync_settings.jfa_user_sync_interval_hours": (
+        int,
+        False,
+        12,
+    ),  # New expected config
     "commands.create_trial_invite.jfa_user_expiry_days": (int, False, 3),
     "commands.create_trial_invite.jfa_invite_label_format": (
         str,

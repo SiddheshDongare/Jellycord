@@ -3,14 +3,14 @@
 import asyncio
 import datetime
 import logging
+import sqlite3
 from typing import Optional
 
 import discord
 from discord import app_commands
 
 from modules.commands.auth import is_in_support_and_authorized
-from modules.models import AdminAction
-from modules.config import get_config_value
+from modules.models import AdminAction, InviteInfo
 from modules.messaging import get_message, create_embed
 
 logger = logging.getLogger(__name__)
@@ -20,319 +20,483 @@ logger = logging.getLogger(__name__)
 # TRIAL_ROLE_NAME = "Trial" # To be replaced by config
 
 
-async def remove_invite_command(interaction: discord.Interaction, user: discord.Member):
-    """Remove a trial invite for a user."""
-    cmd_logger = logger.getChild("remove_invite")
-    cmd_logger.info(
-        f"Command initiated by {interaction.user} (ID: {interaction.user.id}) for target user {user.display_name} (ID: {user.id})"
-    )
-    await interaction.response.defer(thinking=True)
+async def _process_remove_invite(
+    interaction: discord.Interaction, user_identifier: str
+):
+    """
+    Processes the logic for removing an invite for a specified user.
+    Attempts to delete the user from JFA-GO and their invite code from JFA-GO.
+    Updates the user's status to 'disabled' in the local database.
+    """
+    await interaction.response.defer(ephemeral=True)
+    bot_instance = interaction.client
+    logger = bot_instance.logger
+    db = bot_instance.db
+    jfa_client = bot_instance.jfa_client  # Will be used in later steps
 
+    target_discord_user: Optional[discord.User] = None
+    jfa_user_cache_entry: Optional[sqlite3.Row] = None
+    jellyfin_username_to_process: Optional[str] = None  # Renamed for clarity
+    discord_user_id_for_db: Optional[str] = None
+
+    identification_notes = []
+    error_messages = []
+
+    logger.info(f"[remove_invite] Initiated for identifier: {user_identifier}")
+
+    # 1. User Identification Logic
     try:
-        # Get the bot instance
-        bot = interaction.client
-
-        # Check if user exists in the database
-        cmd_logger.debug(
-            f"Checking database for invite record for user {user.display_name} (ID: {user.id})"
-        )
-        existing_invite = bot.db.get_invite_info(str(user.id))
-        if not existing_invite:
-            cmd_logger.warning(
-                f"No trial invite found in DB for user {user.display_name}."
-            )
-            await interaction.followup.send(
-                get_message(
-                    "admin_remove_invite.error_no_db_record", user_mention=user.mention
-                ),
-                ephemeral=True,
-            )
-            return
-
-        cmd_logger.info(
-            f"Found invite record for user {user.display_name} (Code: {existing_invite.code}). Attempting deletion."
-        )
-
-        # Delete the invite from the local database
-        db_deleted = bot.db.delete_invite(str(user.id))
-
-        if db_deleted:
-            cmd_logger.info(
-                f"Successfully deleted invite record for user {user.display_name} from database."
-            )
-
-            # Attempt to delete from JFA-GO
-            jfa_deleted = False
-            jfa_message = (
-                "JFA-GO invite deletion not attempted (DB deletion failed first)."
-            )
-            if existing_invite and existing_invite.code:
-                cmd_logger.info(
-                    f"Attempting to delete invite code {existing_invite.code} from JFA-GO."
+        # Attempt to parse as Discord User ID
+        if user_identifier.isdigit():
+            try:
+                user_id_int = int(user_identifier)
+                target_discord_user = await bot_instance.fetch_user(user_id_int)
+                discord_user_id_for_db = str(target_discord_user.id)
+                identification_notes.append(
+                    f"Identified as Discord User by ID: {target_discord_user.name} (`{target_discord_user.id}`)."
                 )
-                jfa_deleted, jfa_message = bot.jfa_client.delete_jfa_invite(
-                    existing_invite.code
+                logger.info(
+                    f"[remove_invite] Identified Discord User by ID: {target_discord_user.name} ({target_discord_user.id})."
                 )
-                if jfa_deleted:
-                    cmd_logger.info(
-                        f"Successfully deleted invite {existing_invite.code} from JFA-GO."
-                    )
-                else:
-                    cmd_logger.warning(
-                        f"Failed to delete invite {existing_invite.code} from JFA-GO: {jfa_message}"
-                    )
-            else:
-                cmd_logger.warning(
-                    "No invite code found in DB record, cannot delete from JFA-GO."
+            except discord.NotFound:
+                logger.warning(
+                    f"[remove_invite] Discord User ID '{user_identifier}' not found."
                 )
-                jfa_message = "No invite code in DB to attempt JFA-GO deletion."
+                error_messages.append(f"Discord User ID '{user_identifier}' not found.")
+            except ValueError:
+                # Should not happen if isdigit() is true, but as a fallback
+                logger.warning(
+                    f"[remove_invite] Invalid Discord User ID format: {user_identifier}"
+                )
+                error_messages.append(
+                    f"Invalid Discord User ID format: '{user_identifier}'."
+                )
 
-            # Record admin action
-            cmd_logger.debug("Recording REMOVE_INVITE admin action.")
-            action = AdminAction(
-                admin_id=str(interaction.user.id),
-                admin_username=interaction.user.display_name,
-                action_type="REMOVE_INVITE",
-                target_user_id=str(user.id),
-                target_username=user.display_name,
-                details=f"Removed trial invite with code: {existing_invite.code}",
-                performed_at=int(
-                    datetime.datetime.now(datetime.timezone.utc).timestamp()
-                ),
-            )
-            bot.db.record_admin_action(action)
-            await bot.log_admin_action(action)
-
-            cmd_logger.info("Admin action logged. Preparing confirmation embed.")
-
-            # --- Role Reversion Logic ---
-            guild = interaction.guild
-            roles_to_remove = []
-            role_removed_name = None
-
-            # Get configured role names
-            # For paid roles, we need to iterate through the map from config
-            plan_to_role_map = get_config_value(
-                "commands.create_user_invite.plan_to_role_map", {}
-            )
-            managed_paid_role_names_config = set(plan_to_role_map.values())
-
-            trial_role_name_config = get_config_value(
-                "commands.create_user_invite.trial_role_name", "Trial"
-            )
-            trial_role_to_add = discord.utils.get(
-                guild.roles, name=trial_role_name_config
-            )
-
-            # Find current paid role to remove
-            for role in user.roles:
-                if role.name in managed_paid_role_names_config:
-                    roles_to_remove.append(role)
-                    role_removed_name = role.name
-                    cmd_logger.info(
-                        f"Identified paid role '{role.name}' to remove from {user.display_name}."
-                    )
-                    break
-
-            role_change_success = True
-            role_change_messages = []
-
-            if roles_to_remove:
+        # Attempt to parse as Discord Mention (if not already identified by ID)
+        elif user_identifier.startswith("<@") and user_identifier.endswith(">"):
+            mention_id_str = user_identifier.strip(
+                "<@!>"
+            )  # Handles both <@id> and <@!id>
+            if mention_id_str.isdigit():
                 try:
-                    await user.remove_roles(
-                        *roles_to_remove, reason="Invite removed by admin"
+                    target_discord_user = await bot_instance.fetch_user(
+                        int(mention_id_str)
                     )
-                    cmd_logger.info(
-                        f"Successfully removed role(s) {[r.name for r in roles_to_remove]} from {user.display_name}."
+                    discord_user_id_for_db = str(target_discord_user.id)
+                    identification_notes.append(
+                        f"Identified as Discord User by mention: {target_discord_user.name} (`{target_discord_user.id}`)."
                     )
-                    role_change_messages.append(
-                        get_message(
-                            "admin_remove_invite.role_summary_removed",
-                            role_name=role_removed_name,
-                        )
+                    logger.info(
+                        f"[remove_invite] Identified Discord User by mention: {target_discord_user.name} ({target_discord_user.id})."
                     )
-                except discord.Forbidden:
-                    role_change_success = False
-                    cmd_logger.error(
-                        f"Failed to remove paid role(s) from {user.display_name}: Missing Permissions."
+                except discord.NotFound:
+                    logger.warning(
+                        f"[remove_invite] Discord User for mention '{user_identifier}' (ID: {mention_id_str}) not found."
                     )
-                    role_change_messages.append(
-                        get_message(
-                            "admin_remove_invite.role_summary_remove_failed_permission",
-                            role_name=role_removed_name,
-                        )
-                    )
-                except discord.HTTPException as e:
-                    role_change_success = False
-                    cmd_logger.error(
-                        f"Failed to remove paid role(s) from {user.display_name} due to API error: {e}"
-                    )
-                    role_change_messages.append(
-                        get_message(
-                            "admin_remove_invite.role_summary_remove_failed_api",
-                            role_name=role_removed_name,
-                        )
+                    error_messages.append(
+                        f"Discord User for mention '{user_identifier}' not found."
                     )
             else:
-                cmd_logger.info(
-                    f"User {user.display_name} did not have a managed paid role to remove."
+                logger.warning(
+                    f"[remove_invite] Invalid Discord mention format: {user_identifier}"
+                )
+                error_messages.append(
+                    f"Invalid Discord mention format: '{user_identifier}'."
                 )
 
-            if trial_role_to_add:
-                if trial_role_to_add not in user.roles:
+        # If not identified as a Discord user directly, treat as Jellyfin username and check cache
+        if (
+            not target_discord_user and not error_messages
+        ):  # Only proceed if no Discord user found yet and no fatal ID/mention parse error
+            logger.info(
+                f"[remove_invite] Identifier '{user_identifier}' not a direct Discord user. Checking JFA cache for Jellyfin username."
+            )
+            jfa_user_cache_entry = await asyncio.to_thread(
+                db.get_jfa_user_from_cache_by_jellyfin_username, user_identifier
+            )
+            if jfa_user_cache_entry:
+                jellyfin_username_to_process = jfa_user_cache_entry["jellyfin_username"]
+                identification_notes.append(
+                    f"Identifier '{user_identifier}' matches Jellyfin username '{jellyfin_username_to_process}' in JFA cache."
+                )
+                logger.info(
+                    f"[remove_invite] Found Jellyfin username '{jellyfin_username_to_process}' in JFA cache."
+                )
+                if jfa_user_cache_entry["discord_id"]:
+                    discord_user_id_for_db = jfa_user_cache_entry["discord_id"]
                     try:
-                        await user.add_roles(
-                            trial_role_to_add,
-                            reason="Reverted to Trial by admin remove_invite",
+                        # Attempt to fetch the Discord user object if we only had Jellyfin username initially
+                        target_discord_user = await bot_instance.fetch_user(
+                            int(discord_user_id_for_db)
                         )
-                        cmd_logger.info(
-                            f"Successfully assigned '{trial_role_name_config}' role to {user.display_name}."
+                        identification_notes.append(
+                            f"Associated Discord User from JFA cache: {target_discord_user.name} (`{discord_user_id_for_db}`)."
                         )
-                        role_change_messages.append(
-                            get_message(
-                                "admin_remove_invite.role_summary_assigned",
-                                role_name=trial_role_name_config,
-                            )
+                        logger.info(
+                            f"[remove_invite] Fetched associated Discord User {target_discord_user.name} from JFA cache (ID: {discord_user_id_for_db})."
                         )
-                    except discord.Forbidden:
-                        role_change_success = (
-                            False  # Keep overall success false if any part fails
+                    except discord.NotFound:
+                        logger.warning(
+                            f"[remove_invite] Discord ID '{discord_user_id_for_db}' from JFA cache (for Jellyfin user '{jellyfin_username_to_process}') not found."
                         )
-                        cmd_logger.error(
-                            f"Failed to assign '{trial_role_name_config}' role to {user.display_name}: Missing Permissions."
+                        identification_notes.append(
+                            f"Discord ID '{discord_user_id_for_db}' (from JFA cache) not found on Discord."
                         )
-                        role_change_messages.append(
-                            get_message(
-                                "admin_remove_invite.role_summary_assign_failed_permission",
-                                role_name=trial_role_name_config,
-                            )
+                    except ValueError:
+                        logger.warning(
+                            f"[remove_invite] Invalid Discord ID '{discord_user_id_for_db}' in JFA cache for '{jellyfin_username_to_process}'."
                         )
-                    except discord.HTTPException as e:
-                        role_change_success = False  # Keep overall success false
-                        cmd_logger.error(
-                            f"Failed to assign '{trial_role_name_config}' role to {user.display_name} due to API error: {e}"
+                        identification_notes.append(
+                            f"Invalid Discord ID '{discord_user_id_for_db}' found in JFA cache."
                         )
-                        role_change_messages.append(
-                            get_message(
-                                "admin_remove_invite.role_summary_assign_failed_api",
-                                role_name=trial_role_name_config,
-                            )
-                        )
-                else:
-                    cmd_logger.info(
-                        f"User {user.display_name} already has the '{trial_role_name_config}' role."
-                    )
-                    role_change_messages.append(
-                        get_message(
-                            "admin_remove_invite.role_summary_already_had_role",
-                            role_name=trial_role_name_config,
-                        )
-                    )
             else:
-                # If trial_role_name_config was set but role not found, it's a config issue on server side
-                if (
-                    trial_role_name_config
-                ):  # Only a warning if it was configured but not found
-                    role_change_success = False  # Potentially, or just a warning if this isn't critical for success
-                    cmd_logger.warning(
-                        f"Could not find the '{trial_role_name_config}' role in the server. Cannot assign."
-                    )
-                    role_change_messages.append(
-                        get_message(
-                            "admin_remove_invite.role_summary_role_not_found_to_assign",
-                            role_name=trial_role_name_config,
-                        )
-                    )
-                # If trial_role_name_config was empty/None from start, it's fine, no message needed here.
-
-            cmd_logger.info("Role changes processed. Sending confirmation embed.")
-
-            embed_color_type = (
-                "warning" if not role_change_success else "success"
-            )  # Use success if all good, warning otherwise
-            # Original logic used red for success here, which is unusual. Changed to success (green). Error (red) might be too strong if only role failed but DB was ok.
-
-            embed = create_embed(
-                title_key="admin_remove_invite.embed_title",
-                description_key="admin_remove_invite.embed_description",
-                description_kwargs={"user_mention": user.mention},
-                color_type=embed_color_type,
-                timestamp=datetime.datetime.now(datetime.timezone.utc),  # UTC
-            )
-            embed.add_field(
-                name=get_message("admin_remove_invite.field_db_details_name"),
-                value=get_message(
-                    "admin_remove_invite.field_db_details_value",
-                    user_display_name=user.display_name,
-                    invite_code=existing_invite.code,
-                ),
-                inline=False,
-            )
-
-            jfa_status_key = (
-                "admin_remove_invite.field_jfa_status_success"
-                if jfa_deleted
-                else "admin_remove_invite.field_jfa_status_failed"
-            )
-            if (
-                not existing_invite.code and not jfa_deleted
-            ):  # If no code, and no deletion attempted/failed
-                jfa_message = get_message(
-                    "admin_remove_invite.field_jfa_status_no_code"
+                logger.info(
+                    f"[remove_invite] Identifier '{user_identifier}' not found as Jellyfin username in JFA cache."
                 )
-                jfa_status_key = "admin_remove_invite.field_jfa_status_failed"  # Or a neutral status? For now, failed implies it wasn't a success.
+                # No error_message append here, as it might be a Discord user not in cache but directly identifiable next
 
-            embed.add_field(
-                name=get_message("admin_remove_invite.field_jfa_status_name"),
-                value=get_message(
-                    "admin_remove_invite.field_jfa_status_value",
-                    status=get_message(jfa_status_key),
-                    details=jfa_message,
-                ),
-                inline=False,
+        # If we have a target_discord_user but no jellyfin_username_to_process yet, try to find it via their Discord ID in cache
+        if target_discord_user and not jellyfin_username_to_process:
+            logger.info(
+                f"[remove_invite] Have Discord user {target_discord_user.name}, checking JFA cache for linked Jellyfin username."
             )
-            embed.add_field(
-                name=get_message("admin_remove_invite.field_role_summary_name"),
-                value="\n".join(role_change_messages)
-                if role_change_messages
-                else get_message("admin_remove_invite.role_summary_no_changes"),
-                inline=False,
+            cached_by_discord_id = await asyncio.to_thread(
+                db.get_jfa_user_from_cache_by_discord_id, str(target_discord_user.id)
             )
-
-            embed.set_footer(text=get_message("admin_remove_invite.embed_footer"))
-
-            await interaction.followup.send(embed=embed)
-        else:
-            # This case means DB deletion failed
-            cmd_logger.error(
-                f"Failed to remove trial invite for {user.display_name}. delete_invite returned False unexpectedly."
-            )
-            await interaction.followup.send(
-                get_message(
-                    "admin_remove_invite.error_db_delete_failed",
-                    user_mention=user.mention,
-                ),
-                ephemeral=True,
-            )
+            if cached_by_discord_id:
+                jellyfin_username_to_process = cached_by_discord_id["jellyfin_username"]
+                identification_notes.append(
+                    f"Found linked Jellyfin username '{jellyfin_username_to_process}' in JFA cache for Discord user {target_discord_user.name}."
+                )
+                logger.info(
+                    f"[remove_invite] Found Jellyfin username '{jellyfin_username_to_process}' for Discord user {target_discord_user.name} via JFA cache."
+                )
+            else:
+                logger.info(
+                    f"[remove_invite] No Jellyfin username linked in JFA cache for Discord user {target_discord_user.name}."
+                )
+                identification_notes.append(
+                    f"No Jellyfin username found in JFA cache for Discord user {target_discord_user.name}."
+                )
 
     except Exception as e:
-        cmd_logger.error(
-            f"Unhandled error in remove_invite command: {str(e)}", exc_info=True
+        logger.error(
+            f"[remove_invite] Unexpected error during user identification for '{user_identifier}': {e}",
+            exc_info=True,
         )
-        # Check if response already sent before sending error message
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                "An unexpected error occurred processing the remove invite command.",
-                ephemeral=True,
+        error_messages.append(
+            f"An unexpected error occurred during user identification: {str(e)}"
+        )
+
+    # Final check and response based on identification outcome
+    if not target_discord_user and not jellyfin_username_to_process:
+        # If error_messages already contains something, it means parsing ID/mention failed.
+        # Otherwise, it means the Jellyfin username lookup also failed.
+        if not error_messages:
+            error_messages.append(
+                f"Could not identify user from identifier '{user_identifier}'. Not a recognized Discord user, and not found as a Jellyfin username in the JFA cache."
             )
-        else:
-            try:
-                await interaction.followup.send(
-                    "An unexpected error occurred processing the remove invite command.",
-                    ephemeral=True,
+
+        logger.warning(
+            f"[remove_invite] Failed to identify user from '{user_identifier}'. Errors: {'; '.join(error_messages)}"
+        )
+        await interaction.edit_original_response(
+            embed=create_embed(
+                title_key="remove_invite.error_title",
+                description_key="remove_invite.error_user_not_found_detailed",  # A new key might be better
+                description_kwargs={
+                    "user_identifier": user_identifier,
+                    "error_details": "\\n- " + "\\n- ".join(error_messages)
+                    if error_messages
+                    else "No specific error details.",
+                },
+                color_type="error",
+            )
+        )
+        return
+
+    # At this point, we should have at least one of target_discord_user or jellyfin_username_to_process
+    # Or discord_user_id_for_db if a Jellyfin user had a Discord ID in cache that wasn't fetchable but is still valid for DB ops.
+
+    # --- Begin Step 2: JFA-GO User Deletion ---
+    if jellyfin_username_to_process:
+        logger.info(
+            f"[remove_invite] Attempting to delete JFA-GO user: '{jellyfin_username_to_process}'."
+        )
+        try:
+            success, message = await asyncio.to_thread(
+                jfa_client.delete_jfa_user_by_username, jellyfin_username_to_process
+            )
+            if success:
+                logger.info(
+                    f"[remove_invite] Successfully deleted JFA-GO user: '{jellyfin_username_to_process}'."
                 )
-            except discord.HTTPException:
-                cmd_logger.error("Failed to send error followup message.")
+                identification_notes.append(
+                    f"Successfully deleted Jellyfin user '{jellyfin_username_to_process}' from JFA-GO."
+                )
+            else:
+                # Common case: User not found in JFA-GO. This is not a critical error for the command's continuation.
+                logger.warning(
+                    f"[remove_invite] Failed to delete JFA-GO user '{jellyfin_username_to_process}': {message}"
+                )
+                identification_notes.append(
+                    f"Attempt to delete Jellyfin user '{jellyfin_username_to_process}' from JFA-GO: {message}."
+                )
+        except Exception as e:
+            logger.error(
+                f"[remove_invite] Error during JFA-GO user deletion for '{jellyfin_username_to_process}': {e}",
+                exc_info=True,
+            )
+            error_messages.append(
+                f"Error deleting Jellyfin user '{jellyfin_username_to_process}' from JFA-GO: {str(e)}."
+            )
+            identification_notes.append(
+                f"An error occurred while trying to delete Jellyfin user '{jellyfin_username_to_process}' from JFA-GO."
+            )
+    else:
+        logger.info(
+            "[remove_invite] No Jellyfin username identified; skipping JFA-GO user deletion step."
+        )
+        identification_notes.append(
+            "No specific Jellyfin username found to attempt JFA-GO user deletion."
+        )
+    # --- End Step 2 ---
+
+    # --- Begin Step 3: Retrieve Local Invite & Attempt JFA-GO Invite Code Deletion ---
+    original_invite_code: Optional[str] = None
+    if discord_user_id_for_db:
+        logger.info(
+            f"[remove_invite] Attempting to retrieve local invite info for Discord ID: {discord_user_id_for_db}"
+        )
+        try:
+            # We need the InviteInfo model here if it's not already imported
+            # from modules.models import InviteInfo (ensure this import is at the top of the file)
+            invite_info_record: Optional[InviteInfo] = await asyncio.to_thread(
+                db.get_invite_info, discord_user_id_for_db
+            )
+            if invite_info_record:
+                original_invite_code = invite_info_record.code
+                logger.info(
+                    f"[remove_invite] Found local invite code '{original_invite_code}' for Discord ID {discord_user_id_for_db}."
+                )
+                identification_notes.append(
+                    f"Found JFA-GO invite code '{original_invite_code}' in local DB for the Discord user."
+                )
+
+                # Now attempt to delete this JFA-GO invite code
+                logger.info(
+                    f"[remove_invite] Attempting to delete JFA-GO invite code: '{original_invite_code}'."
+                )
+                success, message = await asyncio.to_thread(
+                    jfa_client.delete_jfa_invite, original_invite_code
+                )
+                if success:
+                    logger.info(
+                        f"[remove_invite] Successfully deleted JFA-GO invite code: '{original_invite_code}'."
+                    )
+                    identification_notes.append(
+                        f"Successfully deleted JFA-GO invite code '{original_invite_code}'."
+                        )
+                else:
+                    logger.warning(
+                        f"[remove_invite] Failed to delete JFA-GO invite code '{original_invite_code}': {message}"
+                    )
+                    identification_notes.append(
+                        f"Attempt to delete JFA-GO invite code '{original_invite_code}': {message}."
+                    )
+            else:
+                logger.info(
+                    f"[remove_invite] No local invite record found for Discord ID {discord_user_id_for_db}."
+                )
+                identification_notes.append(
+                    "No active JFA-GO invite code found in local DB for the Discord user (no record to delete from JFA-GO)."
+                )
+        except Exception as e:
+            logger.error(
+                f"[remove_invite] Error during local invite retrieval or JFA-GO invite code deletion for Discord ID {discord_user_id_for_db}: {e}",
+                exc_info=True,
+            )
+            error_messages.append(
+                f"Error processing local invite/JFA-GO invite code deletion: {str(e)}."
+            )
+            identification_notes.append(
+                "An error occurred while retrieving local invite details or deleting the JFA-GO invite code."
+            )
+    else:
+        logger.info(
+            "[remove_invite] No Discord ID available for bot-managed JFA-GO invite code processing."
+        )
+        # Add to summary only if we didn't primarily act based on a Jellyfin username without a linked Discord user
+        if not (jellyfin_username_to_process and not target_discord_user):
+            identification_notes.append(
+                "Bot-managed JFA-GO invite code actions skipped (no linked Discord User ID for this operation)."
+            )
+    # --- End Step 3 ---
+
+    # --- Begin Step 4: Update Local DB Status, Log, and Confirm ---
+    status_updated_in_db = False
+    if discord_user_id_for_db:
+        logger.info(
+            f"[remove_invite] Attempting to update status to 'disabled' for Discord ID: {discord_user_id_for_db} in local DB."
+        )
+        try:
+            status_updated_in_db = await asyncio.to_thread(
+                db.update_user_invite_status, discord_user_id_for_db, "disabled"
+            )
+            if status_updated_in_db:
+                logger.info(
+                    f"[remove_invite] Successfully updated status to 'disabled' for Discord ID {discord_user_id_for_db}."
+                )
+                identification_notes.append(
+                    "Successfully set user status to 'disabled' in the local database."
+                )
+            else:
+                # This might happen if the user never had an invite record or another DB issue.
+                logger.warning(
+                    f"[remove_invite] Could not update status to 'disabled' for Discord ID {discord_user_id_for_db} (no record or DB error)."
+                )
+                identification_notes.append(
+                    "Could not update user status to 'disabled' in local DB (no existing record or a database error occurred)."
+                )
+        except Exception as e:
+            logger.error(
+                f"[remove_invite] Error updating local DB status for Discord ID {discord_user_id_for_db}: {e}",
+                exc_info=True,
+            )
+            error_messages.append(f"Error updating user status in local DB: {str(e)}.")
+            identification_notes.append(
+                "An error occurred while updating user status in the local database."
+            )
+    else:  # discord_user_id_for_db is None
+        logger.info(
+            "[remove_invite] No Discord ID available for local database status update."
+        )
+        # Add to summary only if we didn't primarily act based on a Jellyfin username without a linked Discord user
+        if not (jellyfin_username_to_process and not target_discord_user):
+            identification_notes.append(
+                "Local database status update skipped (no linked Discord User ID for this operation)."
+            )
+
+    # Log Admin Action
+    admin_user = interaction.user
+    # Determine the most relevant username and ID for logging based on what was identified
+    log_target_username_display = user_identifier  # Default to the input identifier
+    if target_discord_user:
+        log_target_username_display = target_discord_user.name
+    elif (
+        jellyfin_username_to_process
+    ):  # If no discord user, use Jellyfin username if available
+        log_target_username_display = jellyfin_username_to_process
+
+    log_target_id_display = (
+        discord_user_id_for_db
+        if discord_user_id_for_db
+        else (jellyfin_username_to_process or "N/A")
+    )
+
+    # Create a detailed summary for the log
+    log_details_summary = "; ".join(identification_notes)
+    if error_messages:
+        log_details_summary += f". Issues: {'; '.join(error_messages)}"
+
+    if (
+        len(log_details_summary) > 1000
+    ):  # Cap log details to avoid overly long DB entries
+        log_details_summary = log_details_summary[:997] + "..."
+
+    admin_action_log_entry = AdminAction(
+        admin_id=str(admin_user.id),
+        admin_username=admin_user.name,
+        action_type="remove_invite_process",  # More descriptive action type
+        target_user_id=log_target_id_display,
+        target_username=log_target_username_display,
+        details=f"Input: '{user_identifier}'. Actions: {log_details_summary}",
+        performed_at=int(datetime.datetime.now(datetime.timezone.utc).timestamp()),
+    )
+    try:
+        await asyncio.to_thread(db.record_admin_action, admin_action_log_entry)
+        await bot_instance.log_admin_action(
+            admin_action_log_entry
+        )  # Also send to Discord log channel
+        logger.info(f"[remove_invite] Admin action logged for '{user_identifier}'.")
+    except Exception as e:
+        logger.error(
+            f"[remove_invite] Failed to log admin action for '{user_identifier}': {e}",
+            exc_info=True,
+        )
+        # Non-critical for the user-facing part of the command, but good to note.
+
+    # Send Confirmation Embed
+    final_summary_for_embed = "**Summary of Actions Taken:**\n" + "\n".join(
+        [f"🔷 {note.strip()}" for note in identification_notes]
+    )
+    if error_messages:
+        final_summary_for_embed += "\n\n**Issues Encountered:**\n" + "\n".join(
+            [f"⚠️ {err.strip()}" for err in error_messages]
+        )
+
+    # Determine overall success for embed color - success if no errors, warning otherwise.
+    # Could be more nuanced, e.g. if JFA-GO user deletion failed but local status update worked.
+    embed_color_type = "success" if not error_messages else "warning"
+    if (
+        not status_updated_in_db and not error_messages and discord_user_id_for_db
+    ):  # If main goal of status update failed without other errors
+        embed_color_type = "warning"
+
+    confirmation_embed = create_embed(
+        title_key="remove_invite.confirmation_title",  # New message key
+        description_key="remove_invite.confirmation_description",  # New message key, to be formatted
+        color_type=embed_color_type,
+        # description_kwargs will be set dynamically below
+    )
+    confirmation_embed.description = (
+        get_message(
+            "remove_invite.confirmation_description",
+            target_display=log_target_username_display,  # Use the identified name for user-facing message
+        )
+        + f"\n\n{final_summary_for_embed}"
+    )
+
+    if (
+        len(confirmation_embed.description) > 4000
+    ):  # Discord embed description limit is 4096
+        confirmation_embed.description = (
+            confirmation_embed.description[:4000] + "... (details truncated)"
+        )
+
+    await interaction.edit_original_response(embed=confirmation_embed)
+    # --- End Step 4 ---
+
+    # Placeholder for next steps - for now, just report what was found.
+    # summary_message = "**User Identification & JFA-GO Deletion Summary:**\\n" + "\\n".join([f"- {note}" for note in identification_notes])
+    # if error_messages:
+    #     summary_message += "\\n\\n**Issues during identification:**\\n" + "\\n".join([f"- {err}" for err in error_messages])
+
+    # # Determine primary identified entity for messages
+    # primary_entity_display = user_identifier
+    # if target_discord_user:
+    #     primary_entity_display = f"{target_discord_user.name} (`{target_discord_user.id}`)"
+    # elif jellyfin_username_to_process:
+    #     primary_entity_display = f"Jellyfin User '{jellyfin_username_to_process}'"
+
+    # response_embed = create_embed(
+    #     title_key="remove_invite.identification_title", # New message key
+    #     description_key="remove_invite.identification_summary", # New message key
+    #     description_kwargs={"user_identifier": primary_entity_display, "summary_details": summary_message},
+    #     color_type="info"
+    # )
+    # if len(response_embed.description) > 4000:
+    #     response_embed.description = response_embed.description[:4000] + "... (details truncated)"
+
+    # await interaction.edit_reply(embed=response_embed)
+
+    # TODO: Next steps:
+    # 2. Attempt to delete user from JFA-GO (if jellyfin_username_to_process) -- DONE
+    # 3. Retrieve invite code from bot's DB (if discord_user_id_for_db) -- DONE
+    # 4. Attempt to delete JFA-GO invite code (if found) -- DONE (as part of step 3)
+    # 5. Update user status in user_invites table to "disabled" (if discord_user_id_for_db) -- DONE
+    # 6. Log Admin Action -- DONE
+    # 7. Send Confirmation -- DONE
 
 
 async def remove_invite_error(
@@ -378,14 +542,19 @@ def setup_commands(bot):
 
     @bot.tree.command(
         name="remove_invite",
-        description="Remove a trial invite for a user.",
+        description="Removes a user's invite and disables their record.",
+    )
+    @app_commands.describe(
+        user_identifier="The Discord user (@mention or ID) or their Jellyfin username whose invite should be removed."
     )
     @is_in_support_and_authorized()
-    async def remove_invite(interaction: discord.Interaction, user: discord.Member):
-        await remove_invite_command(interaction, user)
+    async def remove_invite_tree_command(
+        interaction: discord.Interaction, user_identifier: str
+    ):
+        await _process_remove_invite(interaction, user_identifier)
 
     # Register error handler
-    remove_invite.error(remove_invite_error)
+    remove_invite_tree_command.error(remove_invite_error)
 
     # --- Extend Plan Command ---
 

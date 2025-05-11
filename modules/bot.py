@@ -197,6 +197,7 @@ class JfaGoBot(discord.Client):
                 )
                 # Start background tasks even if guild sync fails, as they might be independent
                 self.check_expiry_notifications.start()
+                self.sync_jfa_users_cache_task.start()
                 return
 
             try:
@@ -207,6 +208,7 @@ class JfaGoBot(discord.Client):
                 )
                 # Start background tasks even if guild sync fails
                 self.check_expiry_notifications.start()
+                self.sync_jfa_users_cache_task.start()
                 return
 
             self.logger.info(
@@ -222,6 +224,8 @@ class JfaGoBot(discord.Client):
             self.logger.info(f"Connected to {len(self.guilds)} guilds.")
             # Start background tasks here
             self.check_expiry_notifications.start()
+            self.sync_jfa_users_cache_task.start()
+            self.logger.info("All background tasks started.")
         except Exception as e:
             self.logger.error(
                 f"Error during setup_hook command sync: {str(e)}", exc_info=True
@@ -807,6 +811,39 @@ class JfaGoBot(discord.Client):
         """Wait until the bot is ready before starting the loop."""
         await self.wait_until_ready()
         self.logger.info("Expiry notification task loop is starting.")
+
+    @tasks.loop(
+        hours=get_config_value("sync_settings.jfa_user_sync_interval_hours", 12)
+    )
+    async def sync_jfa_users_cache_task(self):
+        """Periodically fetches all users from JFA-GO and updates the local cache."""
+        self.logger.info("Starting JFA-GO user cache sync task...")
+        try:
+            users_data, message = await asyncio.to_thread(
+                self.jfa_client.get_all_jfa_users
+            )
+            if users_data is not None:
+                self.logger.info(
+                    f"Fetched {len(users_data)} users from JFA-GO. Updating local cache."
+                )
+                await asyncio.to_thread(self.db.upsert_jfa_users, users_data)
+                self.logger.info("JFA-GO user cache sync task completed successfully.")
+            else:
+                self.logger.error(
+                    f"Failed to fetch users from JFA-GO for cache sync: {message}"
+                )
+        except Exception as e:
+            self.logger.error(
+                f"Error during JFA-GO user cache sync task: {e}", exc_info=True
+            )
+
+    @sync_jfa_users_cache_task.before_loop
+    async def before_sync_jfa_users_cache(self):
+        await self.wait_until_ready()
+        interval = get_config_value("sync_settings.jfa_user_sync_interval_hours", 12)
+        self.logger.info(
+            f"sync_jfa_users_cache_task is about to start. Interval: {interval} hours."
+        )
 
     async def on_error(self, event_method: str, *args: Any, **kwargs: Any) -> None:
         """Handle errors for the bot."""

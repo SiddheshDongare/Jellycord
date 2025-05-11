@@ -6,8 +6,9 @@ import sys
 from modules.bot import JfaGoBot, register_event_handlers
 from modules.commands.admin_commands import setup_commands as setup_admin_commands
 from modules.commands.invite_commands import setup_commands as setup_invite_commands
-from modules.commands.user_invite_commands import setup_commands as setup_user_invite_commands
-
+from modules.commands.user_invite_commands import (
+    setup_commands as setup_user_invite_commands,
+)
 from modules.config import get_config_value, validate_config
 from modules.logging_setup import setup_logging
 

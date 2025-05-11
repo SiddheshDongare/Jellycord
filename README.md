@@ -14,17 +14,15 @@ Jellycord is a highly configurable Discord bot designed as a companion app to in
 
 **Important Note / Current Limitations:**
 *   Jellycord currently does **not** support migrating existing users from your JFA-GO database to the bot's database.
-*   The `/remove_invite` command **only** removes the invite record from Jellycord's database and Discord roles. It does **not** remove the user from JFA-GO itself. You will need to manually remove the user from JFA-GO.
-*   These limitations are planned to be addressed in future releases.
-*   Jellycord is best suited for new JFA-GO setups or if these limitations are not major hurdles for your existing workflow.
+*   Jellycord is best suited for new JFA-GO setups or if this limitation is not a major hurdle for your existing workflow.
 
 ## Features
 
 *   **Configurable Invite Types:**
     *   **Trial Invites:** Create temporary, single-use trial invites. Durations for the invite link and the resulting user account are configurable.
     *   **Paid Invites:** Generate invites linked to specific JFA-GO user profiles, with customizable account durations.
-*   **Invite Management (See Limitations Above):**
-    *   Remove existing invite records from the bot's database.
+*   **Enhanced Invite Management:**
+    *   `/remove_invite [user_identifier]`: Identifies a user by Discord mention/ID or Jellyfin username. Attempts to delete the user from JFA-GO, delete their associated JFA-GO invite code, and sets their invite status to 'disabled' in Jellycord's local database. It also attempts to revert their Discord roles.
     *   Extend the expiry of existing JFA-GO user accounts.
 *   **User Notifications:** Automatically notify users via DM before their JFA-GO account expires, with configurable notification timings.
 *   **Role-Based Access Control:** Restrict command usage to users with specific Discord roles within designated support categories/channels.
@@ -258,7 +256,7 @@ Key sections in `config.yaml`:
 *   **`commands`**: Fine-grained settings for specific commands:
     *   `create_trial_invite`: Override JFA-GO user expiry, label format, and assigned Discord role for trial invites.
     *   `create_user_invite`: Override invite link validity, define the mapping from JFA-GO plans to Discord roles, and specify the trial role to remove when a user plan is given.
-    *   `/remove_invite [user]`: Removes an invite record for a specified Discord user from Jellycord's database and attempts to revert their Discord roles. **Does not remove the user from JFA-GO.**
+    *   `/remove_invite [user_identifier]`: Identifies a user by Discord mention/ID or Jellyfin username. Attempts to delete the user from JFA-GO, delete their associated JFA-GO invite code, and sets their invite status to 'disabled' in Jellycord's local database. It also attempts to revert their Discord roles.
     *   `/extend-plan [user] [jfa_username] [months/days/hours/minutes (at least one required)] [reason (optional)] [notify (optional)]`: Extends a user's JFA-GO plan.
 
 ## Module Breakdown
@@ -293,7 +291,7 @@ Once the bot is running and configured:
         <p align="center">
           <img src="images/create_user_invite_command.png" alt="Create User Invite Command Screenshot" width="600"/>
         </p>
-    *   `/remove_invite [user]`: Removes an invite record for a specified Discord user from Jellycord's database and attempts to revert their Discord roles. **Does not remove the user from JFA-GO.**
+    *   `/remove_invite [user_identifier]`: Identifies a user by Discord mention/ID or Jellyfin username. Attempts to delete the user from JFA-GO, delete their associated JFA-GO invite code, and sets their invite status to 'disabled' in Jellycord's local database. It also attempts to revert their Discord roles.
         <p align="center">
           <img src="images/remove_invite_command.png" alt="Remove Invite Command Screenshot" width="600"/>
         </p>

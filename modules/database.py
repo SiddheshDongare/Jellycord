@@ -4,7 +4,7 @@ import datetime
 import logging
 import sqlite3
 from contextlib import contextmanager
-from typing import Generator, List, Optional
+from typing import Generator, List, Optional, Dict, Any
 
 from modules.config import get_config_value
 from modules.models import AdminAction, InviteInfo
@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS user_invites (
     jfa_user_id TEXT NULL,          -- Added: Corresponding JFA-GO User ID (once known)
     plan_type TEXT NULL,            -- Added: e.g., 'Trial', 'Premium Profile'
     account_expires_at INTEGER NULL,-- Added: Timestamp when the JFA-GO account expires
-    last_notified_at INTEGER NULL   -- Added: Timestamp when expiry notification was last sent
+    last_notified_at INTEGER NULL,  -- Added: Timestamp when expiry notification was last sent
+    status TEXT NULL                -- Added: 'trial', 'paid', 'disabled'
 );
 
 CREATE TABLE IF NOT EXISTS admin_actions (
@@ -33,6 +34,18 @@ CREATE TABLE IF NOT EXISTS admin_actions (
     target_username TEXT NOT NULL,
     details TEXT,
     performed_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS jfa_user_cache (
+    jfa_id TEXT PRIMARY KEY,
+    jellyfin_username TEXT NOT NULL UNIQUE,
+    discord_id TEXT UNIQUE,
+    email TEXT,
+    expiry INTEGER,
+    disabled BOOLEAN,
+    jfa_accounts_admin BOOLEAN,
+    jfa_admin BOOLEAN,
+    last_synced INTEGER NOT NULL
 );
 """
 
@@ -119,8 +132,16 @@ class Database:
         account_expires_at: Optional[int] = None,
     ) -> None:
         """Record or update a user's invite information."""
+        # Determine status based on plan_type
+        status = None
+        if plan_type:
+            if "trial" in plan_type.lower():
+                status = "trial"
+            else:
+                status = "paid"  # Assume any non-trial plan is 'paid'
+
         self.logger.debug(
-            f"Recording invite for user {username} (ID: {user_id}), code: {invite_code}, plan: {plan_type}, expiry: {account_expires_at}"
+            f"Recording invite for user {username} (ID: {user_id}), code: {invite_code}, plan: {plan_type}, expiry: {account_expires_at}, status: {status}"
         )
         try:
             now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
@@ -131,10 +152,10 @@ class Database:
                         """
                         INSERT INTO user_invites (
                             user_id, username, invite_code, created_at, updated_at, claimed,
-                            plan_type, account_expires_at
-                            -- jfa_user_id and last_notified_at are not set here
+                            plan_type, account_expires_at, status
+                            -- jfa_user_id and last_notified_at are not set here initially
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(user_id) DO UPDATE SET
                             username = excluded.username,
                             invite_code = excluded.invite_code,
@@ -143,6 +164,7 @@ class Database:
                             claimed = FALSE, -- Reset claimed status on new invite
                             plan_type = excluded.plan_type,
                             account_expires_at = excluded.account_expires_at,
+                            status = excluded.status, -- Update status
                             last_notified_at = NULL -- Reset notification status on new invite
                         """,
                         (
@@ -154,10 +176,11 @@ class Database:
                             False,  # claimed
                             plan_type,
                             account_expires_at,
+                            status,  # new status field
                         ),
                     )
                     self.logger.info(
-                        f"Recorded/Updated invite for user {username} (ID: {user_id}) with code {invite_code}"
+                        f"Recorded/Updated invite for user {username} (ID: {user_id}) with code {invite_code}, status {status}"
                     )
         except Exception as e:
             self.logger.error(
@@ -281,7 +304,7 @@ class Database:
             # Optionally raise e
 
     def get_expiring_users(self, days_notice: int) -> List[sqlite3.Row]:
-        """Get users whose accounts expire within the configured notice period."""
+        """Get users from user_invites table whose accounts are expiring soon and haven't been notified recently."""
         self.logger.debug(f"Fetching users expiring within {days_notice} days.")
         now = int(
             datetime.datetime.now(datetime.timezone.utc).timestamp()
@@ -313,3 +336,204 @@ class Database:
             # Return empty list on error
 
         return results
+
+    def upsert_jfa_users(self, users_data: List[Dict[str, Any]]) -> None:
+        """Bulk inserts or updates JFA-GO user data into the jfa_user_cache table."""
+        if not users_data:
+            self.logger.info("upsert_jfa_users: No user data provided to upsert.")
+            return
+
+        self.logger.info(f"Upserting {len(users_data)} users into jfa_user_cache.")
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+
+        records_to_upsert = []
+        for user_info in users_data:
+            if not user_info.get("id") or not user_info.get("name"):
+                self.logger.warning(
+                    f"Skipping user data due to missing id or name: {user_info}"
+                )
+                continue
+
+            discord_id_val = user_info.get("discord_id")
+            # Convert empty string discord_id to None to play well with UNIQUE constraint if multiple users have no Discord ID
+            if discord_id_val == "":
+                discord_id_val = None
+
+            records_to_upsert.append(
+                (
+                    user_info.get("id"),
+                    user_info.get("name"),
+                    discord_id_val,  # Use the potentially modified value
+                    user_info.get("email"),
+                    user_info.get("expiry"),
+                    user_info.get("disabled"),
+                    user_info.get("accounts_admin"),  # from JFA-GO field name
+                    user_info.get("admin"),  # from JFA-GO field name
+                    now,
+                )
+            )
+
+        if not records_to_upsert:
+            self.logger.info(
+                "upsert_jfa_users: No valid records to upsert after filtering."
+            )
+            return
+
+        try:
+            with self._get_connection() as conn:
+                with conn:  # Transaction
+                    conn.executemany(
+                        """
+                        INSERT INTO jfa_user_cache (
+                            jfa_id, jellyfin_username, discord_id, email, expiry,
+                            disabled, jfa_accounts_admin, jfa_admin, last_synced
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(jfa_id) DO UPDATE SET
+                            jellyfin_username = excluded.jellyfin_username,
+                            discord_id = excluded.discord_id,
+                            email = excluded.email,
+                            expiry = excluded.expiry,
+                            disabled = excluded.disabled,
+                            jfa_accounts_admin = excluded.jfa_accounts_admin,
+                            jfa_admin = excluded.jfa_admin,
+                            last_synced = excluded.last_synced;
+                    """,
+                        records_to_upsert,
+                    )
+                    self.logger.info(
+                        f"Successfully upserted {len(records_to_upsert)} records into jfa_user_cache."
+                    )
+        except sqlite3.Error as e:
+            self.logger.error(
+                f"Database error during jfa_user_cache upsert: {e}", exc_info=True
+            )
+            # Depending on severity, you might want to raise this
+        except Exception as e:
+            self.logger.error(
+                f"Unexpected error during jfa_user_cache upsert: {e}", exc_info=True
+            )
+            # Depending on severity, you might want to raise this
+
+    def get_jfa_user_from_cache_by_discord_id(
+        self, discord_id: str
+    ) -> Optional[sqlite3.Row]:
+        """Fetches a JFA-GO user from the cache by their Discord ID."""
+        self.logger.debug(f"Fetching JFA user from cache by discord_id: {discord_id}")
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM jfa_user_cache WHERE discord_id = ?", (discord_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    self.logger.debug(
+                        f"Found JFA user in cache for discord_id: {discord_id}"
+                    )
+                    return row
+                self.logger.debug(
+                    f"No JFA user found in cache for discord_id: {discord_id}"
+                )
+                return None
+        except Exception as e:
+            self.logger.error(
+                f"Error getting JFA user from cache by discord_id {discord_id}: {e}",
+                exc_info=True,
+            )
+            return None
+
+    def get_jfa_user_from_cache_by_jellyfin_username(
+        self, jellyfin_username: str
+    ) -> Optional[sqlite3.Row]:
+        """Fetches a JFA-GO user from the cache by their Jellyfin username."""
+        self.logger.debug(
+            f"Fetching JFA user from cache by jellyfin_username: {jellyfin_username}"
+        )
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM jfa_user_cache WHERE jellyfin_username = ?",
+                    (jellyfin_username,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    self.logger.debug(
+                        f"Found JFA user in cache for jellyfin_username: {jellyfin_username}"
+                    )
+                    return row
+                self.logger.debug(
+                    f"No JFA user found in cache for jellyfin_username: {jellyfin_username}"
+                )
+                return None
+        except Exception as e:
+            self.logger.error(
+                f"Error getting JFA user from cache by jellyfin_username {jellyfin_username}: {e}",
+                exc_info=True,
+            )
+            return None
+
+    def get_jfa_user_from_cache_by_jfa_id(self, jfa_id: str) -> Optional[sqlite3.Row]:
+        """Fetches a JFA-GO user from the cache by their JFA ID."""
+        self.logger.debug(f"Fetching JFA user from cache by jfa_id: {jfa_id}")
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM jfa_user_cache WHERE jfa_id = ?", (jfa_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    self.logger.debug(f"Found JFA user in cache for jfa_id: {jfa_id}")
+                    return row
+                self.logger.debug(f"No JFA user found in cache for jfa_id: {jfa_id}")
+                return None
+        except Exception as e:
+            self.logger.error(
+                f"Error getting JFA user from cache by jfa_id {jfa_id}: {e}",
+                exc_info=True,
+            )
+            return None
+
+    def update_user_invite_status(self, user_id: str, status: str) -> bool:
+        """Update the status of a user's invite record (e.g., 'trial', 'paid', 'disabled')."""
+        allowed_statuses = [
+            "trial",
+            "paid",
+            "disabled",
+            None,
+        ]  # None could be used to clear it, though 'disabled' is preferred for removal.
+        if status not in allowed_statuses and status is not None:  # Allow explicit None
+            self.logger.warning(
+                f"Attempted to set invalid status '{status}' for user_id {user_id}. Allowed: {allowed_statuses}"
+            )
+            return False
+
+        self.logger.debug(f"Updating status to '{status}' for user_id: {user_id}")
+        try:
+            with self._get_connection() as conn:
+                with conn:  # Use transaction
+                    cursor = conn.execute(
+                        "UPDATE user_invites SET status = ?, updated_at = ? WHERE user_id = ?",
+                        (
+                            status,
+                            int(
+                                datetime.datetime.now(datetime.timezone.utc).timestamp()
+                            ),
+                            user_id,
+                        ),
+                    )
+                    if cursor.rowcount > 0:
+                        self.logger.info(
+                            f"Successfully updated status to '{status}' for user_id {user_id}"
+                        )
+                        return True
+                    else:
+                        self.logger.warning(
+                            f"No user_invite record found for user_id {user_id} to update status."
+                        )
+                        return False
+        except Exception as e:
+            self.logger.error(
+                f"Error updating status for user {user_id} to '{status}': {str(e)}",
+                exc_info=True,
+            )
+            return False

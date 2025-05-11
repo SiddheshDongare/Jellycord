@@ -167,5 +167,11 @@
         "no_users_to_notify_title": "ℹ️ No Users to Notify",
         "no_users_to_notify_description": "No users are due for an expiry notification at this time.",
         "footer_text": "{bot_name} Expiry Notifications"
+    },
+    "remove_invite": {
+        "confirmation_title": "Invite Removal Processed",
+        "confirmation_description": "The invite removal process for **{target_display}** has been completed. See details below.",
+        "error_title": "Invite Removal Error",
+        "error_user_not_found_detailed": "Could not process invite removal for identifier: **{user_identifier}**.\nDetails:\n{error_details}"
     }
 }
