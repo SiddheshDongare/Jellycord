@@ -81,6 +81,10 @@ notification_settings: # Settings for user account expiry notifications
   # The notification task runs periodically (e.g. every 6 hours in bot.py), so it aims to catch these days.
   notification_days_before_expiry: [3, 0] # Example: Notify 3 days before and on the day of expiry.
 
+sync_settings: # Settings for JFA-GO data synchronization tasks
+  # How often (in hours) to sync the JFA-GO user list with the local cache.
+  jfa_user_sync_interval_hours: 12
+
 commands: # Command-specific configurations
   create_trial_invite:
     # Duration in days for the JFA-GO user account created by a trial invite.

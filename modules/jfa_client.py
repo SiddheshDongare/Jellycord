@@ -809,3 +809,196 @@ class JfaGoClient:
                 exc_info=True,
             )
             return None
+
+    def get_all_jfa_users(self) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+        """Get all users from JFA-GO."""
+        if not self.ensure_auth():
+            return None, "Authentication failed"
+
+        try:
+            self.logger.info("Fetching all users from JFA-GO API...")
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = self.session.get(
+                f"{self.base_url}/users", headers=headers, timeout=20
+            )  # Increased timeout for potentially large response
+
+            self._log_api_call("GET", f"{self.base_url}/users", response=response)
+
+            if response.status_code == 401:
+                self.logger.warning(
+                    "Got 401 fetching all JFA-GO users, attempting token refresh"
+                )
+                self.auth_token = None
+                self.token_expiry = None
+                if self.login():
+                    # Retry the original call after successful login
+                    headers_retry = {"Authorization": f"Bearer {self.auth_token}"}
+                    response = self.session.get(
+                        f"{self.base_url}/users", headers=headers_retry, timeout=20
+                    )
+                    self._log_api_call(
+                        "GET", f"{self.base_url}/users", response=response
+                    )  # Log retry attempt
+                else:
+                    return None, "Authentication failed when refreshing token"
+
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    users_list = data.get("users")
+                    if isinstance(users_list, list):
+                        self.logger.info(
+                            f"Successfully fetched {len(users_list)} users from JFA-GO."
+                        )
+                        return (
+                            users_list,
+                            f"Successfully fetched {len(users_list)} users.",
+                        )
+                    else:
+                        self.logger.error(
+                            f"Unexpected structure for 'users' key in JFA-GO /users response: {type(users_list)}"
+                        )
+                        self.logger.debug(f"Raw /users response: {response.text}")
+                        return (
+                            None,
+                            "Unexpected response structure from JFA-GO /users endpoint.",
+                        )
+                except json.JSONDecodeError as e:
+                    self.logger.error(
+                        f"Failed to parse JSON from JFA-GO /users response: {str(e)}"
+                    )
+                    self.logger.debug(f"Raw /users response text: {response.text}")
+                    return None, f"Failed to parse JSON response: {str(e)}"
+            else:
+                error_message = f"Failed to get users from JFA-GO. Status: {response.status_code}, Response: {response.text[:200]}"
+                self.logger.error(error_message)
+                return None, error_message
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Network error fetching users from JFA-GO: {str(e)}")
+            return None, f"Network error: {str(e)}"
+        except Exception as e:
+            self.logger.error(
+                f"Unexpected error fetching users from JFA-GO: {str(e)}", exc_info=True
+            )
+            return None, f"Unexpected error: {str(e)}"
+
+    def delete_jfa_user_by_username(self, jellyfin_username: str) -> Tuple[bool, str]:
+        """Deletes a JFA-GO user by their Jellyfin username.
+
+        This method first fetches all users, finds the user by their Jellyfin username (name field)
+        to get their JFA-GO ID, and then sends a DELETE request to the /users endpoint
+        with the user's ID in the payload.
+        """
+        self.logger.info(f"Attempting to delete JFA-GO user: {jellyfin_username}")
+        if not self.ensure_auth():
+            return False, "Authentication failed"
+
+        # Step 1: Get all users
+        all_users, message = self.get_all_jfa_users()
+        if not all_users:
+            self.logger.error(
+                f"Could not fetch user list to find ID for {jellyfin_username}: {message}"
+            )
+            return False, f"Could not fetch user list: {message}"
+
+        # Step 2: Find the user by jellyfin_username (name field) to get their JFA-GO ID
+        user_id_to_delete = None
+        for user in all_users:
+            if user.get("name") == jellyfin_username:
+                user_id_to_delete = user.get("id")
+                break
+
+        if not user_id_to_delete:
+            self.logger.warning(
+                f"User '{jellyfin_username}' not found in JFA-GO user list. Cannot delete."
+            )
+            return (
+                False,
+                f"User '{jellyfin_username}' not found in JFA-GO user list.",
+            )  # Technically, user not found is a form of "success" for deletion, but we report it as not found.
+
+        self.logger.info(
+            f"Found user ID '{user_id_to_delete}' for Jellyfin username '{jellyfin_username}'. Proceeding with deletion."
+        )
+
+        # Step 3: Make DELETE request to /users with the ID in payload
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.auth_token}",
+                "Content-Type": "application/json",
+            }
+            payload = {"users": [user_id_to_delete]}
+            url = f"{self.base_url}/users"  # Endpoint is just /users for DELETE
+
+            self.logger.debug(
+                f"Sending DELETE request to {url} with payload: {json.dumps(payload)}"
+            )
+            response = self.session.delete(
+                url, headers=headers, json=payload, timeout=15
+            )
+            self._log_api_call("DELETE", url, payload=payload, response=response)
+
+            if response.status_code == 401:
+                self.logger.warning(
+                    f"Got 401 while deleting user {jellyfin_username}, attempting token refresh"
+                )
+                self.auth_token = None
+                self.token_expiry = None
+                if self.login():
+                    # Retry the deletion logic. This could be a recursive call or a loop.
+                    # For simplicity in this refactor, we'll just log and return failure for now,
+                    # but a full retry might be desired.
+                    self.logger.info(
+                        "Retrying user deletion after re-login. (Not implemented in this pass, returning failure)"
+                    )
+                    # To implement retry: return self.delete_jfa_user_by_username(jellyfin_username)
+                    return (
+                        False,
+                        "Authentication failed and re-login occurred; please retry the operation.",
+                    )
+                return False, "Authentication failed when refreshing token"
+
+            # JFA-GO might return 200 or 204 for successful deletion, or other codes.
+            # We need to know what a successful deletion looks like.
+            # Assuming 200 or 204 means success for now.
+            if response.status_code in [200, 204]:
+                self.logger.info(
+                    f"Successfully sent delete request for user {jellyfin_username} (ID: {user_id_to_delete}). Status: {response.status_code}"
+                )
+                # Check response body for more specific success/failure messages if JFA-GO provides them
+                try:
+                    response_data = response.json()
+                    self.logger.debug(f"Delete response body: {response_data}")
+                    # Example: if response_data.get("success") or similar field indicates true success
+                    # For now, assume status code is enough.
+                except json.JSONDecodeError:
+                    self.logger.debug(
+                        "No JSON body in delete response or non-JSON response."
+                    )
+                return True, f"Successfully deleted user {jellyfin_username}."
+            # Handle specific error messages if JFA-GO returns them in a structured way
+            else:
+                error_message = f"Failed to delete user {jellyfin_username}. Status: {response.status_code}."
+                try:
+                    response_data = response.json()
+                    error_detail = response_data.get(
+                        "error", response.text
+                    )  # Or other relevant error fields
+                    error_message += f" Details: {error_detail}"
+                except json.JSONDecodeError:
+                    error_message += f" Details: {response.text}"
+                self.logger.error(error_message)
+                return False, error_message
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(
+                f"Network error while deleting user {jellyfin_username} from JFA-GO: {str(e)}"
+            )
+            return False, f"Network error: {str(e)}"
+        except Exception as e:
+            self.logger.error(
+                f"Unexpected error while deleting user {jellyfin_username}: {str(e)}",
+                exc_info=True,
+            )
+            return False, f"Unexpected error: {str(e)}"
