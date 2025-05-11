@@ -19,7 +19,7 @@ Key components:
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import yaml  # Added for YAML loading
 from dotenv import load_dotenv
@@ -424,11 +424,11 @@ def validate_config() -> None:
 
         # 2. Basic Type Validation (already partially done, let's refine)
         type_valid = True
-        if p_type == list and not isinstance(val, list):
+        if p_type is list and not isinstance(val, list):
             type_valid = False
-        elif p_type == dict and not isinstance(val, dict):
+        elif p_type is dict and not isinstance(val, dict):
             type_valid = False
-        elif p_type == int and not isinstance(val, int):
+        elif p_type is int and not isinstance(val, int):
             # Allow stringified integers from env vars if they are digits and not bools
             if isinstance(val, str) and val.isdigit():
                 logger.info(
@@ -437,7 +437,7 @@ def validate_config() -> None:
                 # Or convert and update APP_CONFIG here if auto-conversion during validation is desired
             elif not isinstance(val, bool):  # bool is subclass of int
                 type_valid = False
-        elif p_type == bool and not isinstance(val, bool):
+        elif p_type is bool and not isinstance(val, bool):
             # Allow stringified booleans
             if isinstance(val, str) and val.lower() in [
                 "true",
@@ -454,7 +454,7 @@ def validate_config() -> None:
                 )
             else:
                 type_valid = False
-        elif p_type == str and not isinstance(val, str):
+        elif p_type is str and not isinstance(val, str):
             type_valid = False
 
         if not type_valid:
