@@ -14,10 +14,16 @@ README.md
 venv/
 .env
 
+<<<<<<< HEAD
 # Logs & Databases & Configs
 jfa_bot.log
 jfa_bot.db
 config.yaml
+=======
+# Logs & Databases
+jfa_bot.log
+jfa_bot.db
+>>>>>>> dev
 
 # Python cache/compiled files
 __pycache__/
@@ -28,6 +34,10 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+<<<<<<< HEAD
 .cursor
 images/
 memory-bank/
+=======
+PROJECT.md
+>>>>>>> dev

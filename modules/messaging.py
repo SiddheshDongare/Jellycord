@@ -152,113 +152,117 @@ def get_embed_color(color_type: str) -> discord.Color:
 
 
 def create_embed(
-    title_key: Optional[str] = None,
-    description_key: Optional[str] = None,
-    color_type: str = "info",
-    title_kwargs: Optional[Dict[str, Any]] = None,
-    description_kwargs: Optional[Dict[str, Any]] = None,
-    footer_key: Optional[str] = None,
-    footer_kwargs: Optional[Dict[str, Any]] = None,
-    fields: Optional[list] = None,
-    **embed_constructor_kwargs: Any,
-) -> discord.Embed:
-    """
-    Creates a discord.Embed object using message templates for title and description.
+    title_key=None,
+    description_key=None,
+    title=None,
+    description=None,
+    color_type="default",
+    description_kwargs=None,
+    timestamp=None,
+    footer_key=None,
+    fields=None
+):
+    """Creates a Discord embed with standard formatting.
 
     Args:
-        title_key: Dot-separated key for the embed title in message_templates.json.
-        description_key: Dot-separated key for the embed description.
-        color_type: Type of color (e.g., 'success', 'error', 'info', 'warning') to fetch from config.
-        title_kwargs: Keyword arguments for formatting the title string.
-        description_kwargs: Keyword arguments for formatting the description string.
-        footer_key: Dot-separated key for the embed footer text. If provided, this takes precedence.
-        footer_kwargs: Keyword arguments for formatting the footer string if footer_key is used.
-        fields: A list of dictionaries, where each dict defines a field (name, value, inline). Example: [{'name_key': 'key', 'value_key': 'key', 'inline': False, 'name_kwargs': {}, 'value_kwargs': {}}]
-        **embed_constructor_kwargs: Additional keyword arguments to pass directly to the discord.Embed constructor
-                                (e.g., timestamp=datetime.datetime.now()). Note: 'footer' passed here will be overridden by footer_key or default footer logic.
+        title_key (str, optional): The message key for the embed title.
+        description_key (str, optional): The message key for the embed description.
+        title (str, optional): Direct title text (bypasses message template lookup).
+        description (str, optional): Direct description text (bypasses message template lookup).
+        color_type (str, optional): The type of color to use (default, success, error, warning, info).
+        description_kwargs (dict, optional): Keywords arguments to format into the description.
+        timestamp (datetime, optional): Timestamp to add to the embed.
+        footer_key (str, optional): The message key for the embed footer.
+        fields (list, optional): List of field dictionaries to add to the embed.
+
+    Returns:
+        discord.Embed: A formatted embed.
+    """
+    # Set embed color based on type
+    if color_type == "success":
+        color = 0x57F287  # Green
+    elif color_type == "error":
+        color = 0xED4245  # Red
+    elif color_type == "warning":
+        color = 0xFEE75C  # Yellow
+    elif color_type == "info":
+        color = 0x5865F2  # Blue
+    else:
+        color = 0x2F3136  # Default Discord dark theme color
+
+    # Create embed
+    embed = discord.Embed(color=color)
+
+    # Set title if provided via key
+    if title_key:
+        embed.title = get_message(title_key)
+    # Set title directly if provided
+    elif title:
+        embed.title = title
+
+    # Set description if provided via key
+    if description_key:
+        kwargs = description_kwargs or {}
+        embed.description = get_message(description_key, **kwargs)
+    # Set description directly if provided
+    elif description:
+        embed.description = description
+
+    # Set timestamp if provided
+    if timestamp:
+        embed.timestamp = timestamp
+
+    # Set footer if footer_key is provided
+    if footer_key:
+        embed.set_footer(text=get_message(footer_key))
+
+    # Add fields if provided
+    if fields:
+        for field in fields:
+            name = get_message(field["name_key"]) if "name_key" in field else field.get("name", "")
+
+            if "value_key" in field:
+                value_kwargs = field.get("value_kwargs", {})
+                value = get_message(field["value_key"], **value_kwargs)
+            else:
+                value = field.get("value", "")
+
+            inline = field.get("inline", True)
+            embed.add_field(name=name, value=value, inline=inline)
+
+    return embed
+
+
+def create_direct_embed(
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    color_type: str = "info",
+    timestamp: Optional[Any] = None,
+) -> discord.Embed:
+    """
+    Creates a discord.Embed object with direct title and description values.
+
+    Args:
+        title: Direct text for the embed title.
+        description: Direct text for the embed description.
+        color_type: Type of color (e.g., 'success', 'error', 'info', 'warning').
+        timestamp: Optional timestamp to set on the embed.
 
     Returns:
         A discord.Embed object.
     """
-    title = get_message(title_key, **(title_kwargs or {})) if title_key else None
-    description = (
-        get_message(description_key, **(description_kwargs or {}))
-        if description_key
-        else None
-    )
     color = get_embed_color(color_type)
 
-    # Prepare kwargs for Embed constructor, excluding 'footer' if present in direct kwargs, as we handle it separately
-    # also exclude title and description as they are handled by keys
-    valid_embed_kwargs = {
-        k: v
-        for k, v in embed_constructor_kwargs.items()
-        if k not in ["footer", "title", "description"]
-    }
-
+    # Create embed with direct values
     embed = discord.Embed(
-        title=title, description=description, color=color, **valid_embed_kwargs
+        title=title,
+        description=description,
+        color=color
     )
 
-    # Handle Footer
-    footer_text_to_set = None
-    bot_name = get_bot_display_name()  # Get bot name once for potential use
-
-    if footer_key:
-        # If a specific footer_key is provided, use it.
-        # Pass bot_name to get_message in case the template uses {bot_name}
-        footer_text_to_set = get_message(
-            footer_key, **(footer_kwargs or {}), bot_name=bot_name
-        )
-    elif (
-        "footer" in embed_constructor_kwargs
-    ):  # Check if footer was passed in direct kwargs
-        footer_info = embed_constructor_kwargs["footer"]
-        if isinstance(footer_info, dict) and "text" in footer_info:
-            raw_footer_text = footer_info["text"]
-            # If direct footer text might contain {bot_name}, format it.
-            try:
-                footer_text_to_set = raw_footer_text.format(bot_name=bot_name)
-            except KeyError:  # If {bot_name} is not a placeholder, use as is
-                footer_text_to_set = raw_footer_text
-        elif isinstance(footer_info, str):
-            try:
-                footer_text_to_set = footer_info.format(bot_name=bot_name)
-            except KeyError:
-                footer_text_to_set = footer_info
-    else:
-        # If no specific footer provided, use the default footer from config
-        default_footer_text_format = get_config_value(
-            "message_settings.embed_footer_text"
-        )
-        if default_footer_text_format:
-            try:
-                footer_text_to_set = default_footer_text_format.format(
-                    bot_name=bot_name
-                )
-            except KeyError:  # Should not happen if template is correct
-                footer_text_to_set = default_footer_text_format
-
-    if footer_text_to_set:
-        # icon_url can also be part of footer_info if it was a dict
-        icon_url = None
-        if "footer" in embed_constructor_kwargs and isinstance(
-            embed_constructor_kwargs["footer"], dict
-        ):
-            icon_url = embed_constructor_kwargs["footer"].get("icon_url")
-        embed.set_footer(text=footer_text_to_set, icon_url=icon_url)
-
-    # Handle Fields if provided
-    if fields:
-        for field_data in fields:
-            field_name = get_message(
-                field_data["name_key"], **(field_data.get("name_kwargs") or {})
-            )
-            field_value = get_message(
-                field_data["value_key"], **(field_data.get("value_kwargs") or {})
-            )
-            is_inline = field_data.get("inline", False)
-            embed.add_field(name=field_name, value=field_value, inline=is_inline)
+    # Set timestamp if provided
+    if timestamp:
+        embed.timestamp = timestamp
 
     return embed
 

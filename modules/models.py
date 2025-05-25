@@ -17,6 +17,7 @@ class InviteInfo:
     plan_type: Optional[str] = None
     account_expires_at: Optional[int] = None
     last_notified_at: Optional[int] = None
+    status: Optional[str] = None
 
 
 @dataclass

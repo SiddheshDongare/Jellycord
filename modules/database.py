@@ -114,6 +114,7 @@ class Database:
                         plan_type=row["plan_type"],
                         account_expires_at=row["account_expires_at"],
                         last_notified_at=row["last_notified_at"],
+                        status=row["status"],
                     )
                 self.logger.debug(f"No invite record found for user_id: {user_id}")
                 return None
@@ -537,3 +538,69 @@ class Database:
                 exc_info=True,
             )
             return False
+
+    def get_invite_status(self, user_id: str) -> Optional[str]:
+        """Get the status of a user's invite record."""
+        self.logger.debug(f"Getting invite status for user_id: {user_id}")
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT status FROM user_invites WHERE user_id = ?", (user_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    status = row["status"]
+                    self.logger.debug(f"Found invite status '{status}' for user_id: {user_id}")
+                    return status
+                self.logger.debug(f"No invite record found for user_id: {user_id}")
+                return None
+        except Exception as e:
+            self.logger.error(
+                f"Error getting invite status for user_id {user_id}: {str(e)}"
+            )
+            return None
+
+    def get_invite_by_username(self, username: str) -> Optional[sqlite3.Row]:
+        """Get user invite record by Discord username."""
+        self.logger.debug(f"Fetching invite info for username: {username}")
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM user_invites WHERE username = ?", (username,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    self.logger.debug(f"Found invite record for username: {username}")
+                    return row
+                self.logger.debug(f"No invite record found for username: {username}")
+                return None
+        except Exception as e:
+            self.logger.error(
+                f"Error getting invite info for username {username}: {str(e)}"
+            )
+            return None
+
+    def find_invites_by_username_pattern(self, pattern: str) -> List[sqlite3.Row]:
+        """Find user invite records by username pattern matching.
+
+        This is useful when trying to find users that might have similar usernames
+        with minor variations (e.g., different case, minor typos).
+        """
+        self.logger.debug(f"Searching for invites with username pattern: {pattern}")
+        results = []
+        try:
+            with self._get_connection() as conn:
+                # Use LIKE query with wildcards to do pattern matching
+                like_pattern = f"%{pattern}%"
+                cursor = conn.execute(
+                    "SELECT * FROM user_invites WHERE username LIKE ? ORDER BY created_at DESC",
+                    (like_pattern,)
+                )
+                results = cursor.fetchall()
+                self.logger.debug(f"Found {len(results)} invite records matching pattern: {pattern}")
+                return results
+        except Exception as e:
+            self.logger.error(
+                f"Error finding invites by username pattern {pattern}: {str(e)}"
+            )
+            return []

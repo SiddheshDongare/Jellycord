@@ -11,7 +11,7 @@ from discord import app_commands
 
 from modules.commands.auth import is_in_support_and_authorized
 from modules.models import AdminAction, InviteInfo
-from modules.messaging import get_message, create_embed
+from modules.messaging import get_message, create_embed, create_direct_embed
 
 logger = logging.getLogger(__name__)
 
@@ -149,11 +149,47 @@ async def _process_remove_invite(
                         identification_notes.append(
                             f"Invalid Discord ID '{discord_user_id_for_db}' found in JFA cache."
                         )
-            else:
-                logger.info(
-                    f"[remove_invite] Identifier '{user_identifier}' not found as Jellyfin username in JFA cache."
-                )
-                # No error_message append here, as it might be a Discord user not in cache but directly identifiable next
+                else:
+                    logger.info(
+                        f"[remove_invite] Identifier '{user_identifier}' not found as Jellyfin username in JFA cache."
+                    )
+                    # No error_message append here, as it might be a Discord user not in cache but directly identifiable next
+
+                    # Check if the identifier matches a Discord username in the user_invites table
+                    logger.info(
+                        f"[remove_invite] Checking if '{user_identifier}' matches a Discord username in user_invites table."
+                    )
+                    invite_by_username = await asyncio.to_thread(
+                        db.get_invite_by_username, user_identifier
+                    )
+                    if invite_by_username:
+                        discord_user_id_for_db = invite_by_username["user_id"]
+                        identification_notes.append(
+                            f"Found Discord user ID '{discord_user_id_for_db}' for username '{user_identifier}' in user_invites table."
+                        )
+                        logger.info(
+                            f"[remove_invite] Found Discord user ID '{discord_user_id_for_db}' for username '{user_identifier}' in local database."
+                        )
+                        try:
+                            # Try to fetch the Discord user object
+                            target_discord_user = await bot_instance.fetch_user(
+                                int(discord_user_id_for_db)
+                            )
+                            identification_notes.append(
+                                f"Retrieved Discord user object for {target_discord_user.name} (ID: {discord_user_id_for_db})."
+                            )
+                            logger.info(
+                                f"[remove_invite] Retrieved Discord user object for {target_discord_user.name} (ID: {discord_user_id_for_db})."
+                            )
+                        except (discord.NotFound, ValueError):
+                            # We have the user ID but couldn't fetch the Discord user object
+                            # That's okay, we can still use the ID for database operations
+                            logger.warning(
+                                f"[remove_invite] Could not fetch Discord user object for ID '{discord_user_id_for_db}', but we have the ID for DB operations."
+                            )
+                            identification_notes.append(
+                                f"Could not fetch Discord user object for ID '{discord_user_id_for_db}', but we have the ID for DB operations."
+                            )
 
         # If we have a target_discord_user but no jellyfin_username_to_process yet, try to find it via their Discord ID in cache
         if target_discord_user and not jellyfin_username_to_process:
@@ -179,6 +215,57 @@ async def _process_remove_invite(
                     f"No Jellyfin username found in JFA cache for Discord user {target_discord_user.name}."
                 )
 
+                # FALLBACK: Try using the Discord username as a potential Jellyfin username
+                logger.info(
+                    f"[remove_invite] Trying fallback: checking if Discord username '{target_discord_user.name}' exists as Jellyfin username."
+                )
+                jfa_user_by_discord_name = await asyncio.to_thread(
+                    db.get_jfa_user_from_cache_by_jellyfin_username, target_discord_user.name
+                )
+                if jfa_user_by_discord_name:
+                    jellyfin_username_to_process = jfa_user_by_discord_name["jellyfin_username"]
+                    identification_notes.append(
+                        f"Fallback: Found Jellyfin username '{jellyfin_username_to_process}' matching Discord username."
+                    )
+                    logger.info(
+                        f"[remove_invite] Fallback successful: Discord username '{target_discord_user.name}' matches Jellyfin username."
+                    )
+                else:
+                    logger.info(
+                        f"[remove_invite] Fallback failed: Discord username '{target_discord_user.name}' not found as Jellyfin username."
+                    )
+                    identification_notes.append(
+                        f"Fallback attempt: Discord username '{target_discord_user.name}' not found as Jellyfin username."
+                    )
+
+                    # FALLBACK 2: Check if Discord display name matches any Jellyfin username
+                    # This might be needed if usernames get altered due to Discord's username system
+                    if hasattr(target_discord_user, "display_name") and target_discord_user.display_name != target_discord_user.name:
+                        logger.info(
+                            f"[remove_invite] Trying second fallback: checking if Discord display name '{target_discord_user.display_name}' exists as Jellyfin username."
+                        )
+                        jfa_user_by_display_name = await asyncio.to_thread(
+                            db.get_jfa_user_from_cache_by_jellyfin_username, target_discord_user.display_name
+                        )
+                        if jfa_user_by_display_name:
+                            jellyfin_username_to_process = jfa_user_by_display_name["jellyfin_username"]
+                            identification_notes.append(
+                                f"Second fallback: Found Jellyfin username '{jellyfin_username_to_process}' matching Discord display name."
+                            )
+                            logger.info(
+                                f"[remove_invite] Second fallback successful: Discord display name '{target_discord_user.display_name}' matches Jellyfin username."
+                            )
+                        else:
+                            # FORCE ATTEMPT: Try to delete using display name even if not found in cache
+                            logger.info(
+                                f"[remove_invite] Force attempt: Will try to delete JFA-GO user '{target_discord_user.display_name}' even though not in cache."
+                            )
+                            # Set the jellyfin_username_to_process to force deletion attempt
+                            jellyfin_username_to_process = target_discord_user.display_name
+                            identification_notes.append(
+                                f"Force attempt: Will try to delete JFA-GO user '{target_discord_user.display_name}' directly."
+                            )
+
     except Exception as e:
         logger.error(
             f"[remove_invite] Unexpected error during user identification for '{user_identifier}': {e}",
@@ -193,27 +280,37 @@ async def _process_remove_invite(
         # If error_messages already contains something, it means parsing ID/mention failed.
         # Otherwise, it means the Jellyfin username lookup also failed.
         if not error_messages:
+            # FORCE ATTEMPT: Try using the original identifier as Jellyfin username
+            logger.info(
+                f"[remove_invite] Force attempt: Will try to delete JFA-GO user '{user_identifier}' even though not in cache."
+            )
+            # Set the jellyfin_username_to_process to force deletion attempt
+            jellyfin_username_to_process = user_identifier
+            identification_notes.append(
+                f"Force attempt: Will try to delete JFA-GO user '{user_identifier}' directly."
+            )
+        else:
             error_messages.append(
                 f"Could not identify user from identifier '{user_identifier}'. Not a recognized Discord user, and not found as a Jellyfin username in the JFA cache."
             )
 
-        logger.warning(
-            f"[remove_invite] Failed to identify user from '{user_identifier}'. Errors: {'; '.join(error_messages)}"
-        )
-        await interaction.edit_original_response(
-            embed=create_embed(
-                title_key="remove_invite.error_title",
-                description_key="remove_invite.error_user_not_found_detailed",  # A new key might be better
-                description_kwargs={
-                    "user_identifier": user_identifier,
-                    "error_details": "\\n- " + "\\n- ".join(error_messages)
-                    if error_messages
-                    else "No specific error details.",
-                },
-                color_type="error",
+            logger.warning(
+                f"[remove_invite] Failed to identify user from '{user_identifier}'. Errors: {'; '.join(error_messages)}"
             )
-        )
-        return
+            await interaction.edit_original_response(
+                embed=create_embed(
+                    title_key="remove_invite.error_title",
+                    description_key="remove_invite.error_user_not_found_detailed",  # A new key might be better
+                    description_kwargs={
+                        "user_identifier": user_identifier,
+                        "error_details": "\\n- " + "\\n- ".join(error_messages)
+                        if error_messages
+                        else "No specific error details.",
+                    },
+                    color_type="error",
+                )
+            )
+            return
 
     # At this point, we should have at least one of target_discord_user or jellyfin_username_to_process
     # Or discord_user_id_for_db if a Jellyfin user had a Discord ID in cache that wasn't fetchable but is still valid for DB ops.
@@ -371,11 +468,100 @@ async def _process_remove_invite(
         logger.info(
             "[remove_invite] No Discord ID available for local database status update."
         )
-        # Add to summary only if we didn't primarily act based on a Jellyfin username without a linked Discord user
-        if not (jellyfin_username_to_process and not target_discord_user):
-            identification_notes.append(
-                "Local database status update skipped (no linked Discord User ID for this operation)."
+
+        # If we have a jellyfin_username but no Discord ID, try to find the Discord ID from user_invites
+        if jellyfin_username_to_process:
+            logger.info(
+                f"[remove_invite] Trying to find Discord ID for Jellyfin username '{jellyfin_username_to_process}' in user_invites table."
             )
+            try:
+                # Try to find by username in the user_invites table
+                user_invite_record = await asyncio.to_thread(
+                    db.get_invite_by_username, jellyfin_username_to_process
+                )
+
+                if user_invite_record:
+                    found_discord_id = user_invite_record["user_id"]
+                    logger.info(
+                        f"[remove_invite] Found Discord ID '{found_discord_id}' for Jellyfin username '{jellyfin_username_to_process}' in user_invites table."
+                    )
+
+                    # Update the status
+                    status_updated_in_db = await asyncio.to_thread(
+                        db.update_user_invite_status, found_discord_id, "disabled"
+                    )
+
+                    if status_updated_in_db:
+                        logger.info(
+                            f"[remove_invite] Successfully updated status to 'disabled' for Discord ID {found_discord_id} found via Jellyfin username."
+                        )
+                        identification_notes.append(
+                            f"Found Discord ID in user_invites and set status to 'disabled' for Jellyfin username '{jellyfin_username_to_process}'."
+                        )
+                    else:
+                        logger.warning(
+                            f"[remove_invite] Found Discord ID '{found_discord_id}' but failed to update status."
+                        )
+                        identification_notes.append(
+                            f"Found Discord ID in user_invites but failed to update status for Jellyfin username '{jellyfin_username_to_process}'."
+                        )
+                else:
+                    logger.info(
+                        f"[remove_invite] No Discord ID found for Jellyfin username '{jellyfin_username_to_process}' in user_invites table."
+                    )
+
+                    # Try a reverse lookup - find any user record with this invite code
+                    logger.info(
+                        f"[remove_invite] Trying to find invite records by username pattern matching '{jellyfin_username_to_process}'."
+                    )
+                    user_invites = await asyncio.to_thread(
+                        db.find_invites_by_username_pattern, jellyfin_username_to_process
+                    )
+
+                    if user_invites and len(user_invites) > 0:
+                        found_discord_id = user_invites[0]["user_id"]
+                        logger.info(
+                            f"[remove_invite] Found Discord ID '{found_discord_id}' via pattern matching for '{jellyfin_username_to_process}'."
+                        )
+
+                        # Update the status
+                        status_updated_in_db = await asyncio.to_thread(
+                            db.update_user_invite_status, found_discord_id, "disabled"
+                        )
+
+                        if status_updated_in_db:
+                            logger.info(
+                                f"[remove_invite] Successfully updated status to 'disabled' for Discord ID {found_discord_id} found via pattern matching."
+                            )
+                            identification_notes.append(
+                                f"Found Discord ID via pattern matching and set status to 'disabled' for Jellyfin username '{jellyfin_username_to_process}'."
+                            )
+                        else:
+                            logger.warning(
+                                f"[remove_invite] Found Discord ID '{found_discord_id}' via pattern matching but failed to update status."
+                            )
+                            identification_notes.append(
+                                f"Found Discord ID via pattern matching but failed to update status for Jellyfin username '{jellyfin_username_to_process}'."
+                            )
+                    else:
+                        # Add to summary only if we didn't primarily act based on a Jellyfin username without a linked Discord user
+                        identification_notes.append(
+                            f"Could not find any Discord ID for Jellyfin username '{jellyfin_username_to_process}' in local database."
+                        )
+            except Exception as e:
+                logger.error(
+                    f"[remove_invite] Error trying to find and update status for Jellyfin username '{jellyfin_username_to_process}': {e}",
+                    exc_info=True,
+                )
+                identification_notes.append(
+                    f"Error trying to find and update status for Jellyfin username '{jellyfin_username_to_process}' in local database."
+                )
+        else:
+            # Add to summary only if we didn't primarily act based on a Jellyfin username without a linked Discord user
+            if not (jellyfin_username_to_process and not target_discord_user):
+                identification_notes.append(
+                    "Local database status update skipped (no linked Discord User ID for this operation)."
+                )
 
     # Log Admin Action
     admin_user = interaction.user
@@ -443,18 +629,42 @@ async def _process_remove_invite(
     ):  # If main goal of status update failed without other errors
         embed_color_type = "warning"
 
-    confirmation_embed = create_embed(
-        title_key="remove_invite.confirmation_title",  # New message key
-        description_key="remove_invite.confirmation_description",  # New message key, to be formatted
+    # Standardize the message format for a more consistent display
+    standardized_title = "User Removal Summary"
+    standardized_description = f"**Target User:** {log_target_username_display}"
+
+    # Add standardized action sections with clear outcomes
+    jfa_action_status = "❌ Not Attempted"
+    db_action_status = "❌ Not Attempted"
+
+    # Check if JFA-GO user deletion was attempted
+    for note in identification_notes:
+        if "deleted JFA-GO user" in note:
+            jfa_action_status = "✅ Success"
+            break
+        elif "Attempt to delete Jellyfin user" in note:
+            jfa_action_status = "⚠️ Attempted but failed"
+
+    # Check if local DB status update was attempted
+    if status_updated_in_db:
+        db_action_status = "✅ Success"
+    elif discord_user_id_for_db or "Found Discord ID" in '\n'.join(identification_notes):
+        db_action_status = "⚠️ Attempted but failed"
+
+    standardized_sections = [
+        f"**JFA-GO User Removal:** {jfa_action_status}",
+        f"**Local Database Update:** {db_action_status}"
+    ]
+
+    # Add extra context from the full action summary
+    standardized_sections.append("**Details:**")
+    standardized_sections.append(final_summary_for_embed)
+
+    confirmation_embed = create_direct_embed(
+        title=standardized_title,
+        description=standardized_description + "\n\n" + "\n".join(standardized_sections),
         color_type=embed_color_type,
-        # description_kwargs will be set dynamically below
-    )
-    confirmation_embed.description = (
-        get_message(
-            "remove_invite.confirmation_description",
-            target_display=log_target_username_display,  # Use the identified name for user-facing message
-        )
-        + f"\n\n{final_summary_for_embed}"
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
     )
 
     if (

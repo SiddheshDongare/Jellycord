@@ -122,20 +122,26 @@ async def create_trial_invite_command(interaction: discord.Interaction):
         )
         existing_invite = bot.db.get_invite_info(str(target_user.id))
         if existing_invite and not existing_invite.claimed:
-            cmd_logger.warning(
-                f"User {target_user.display_name} already has an active invite code: {existing_invite.code}"
-            )
-            error_embed = create_embed(
-                title_key="trial_invite.error_already_exists_title",
-                description_key="trial_invite.error_already_exists_desc",
-                description_kwargs={
-                    "user_mention": target_user.mention,
-                    "existing_code": existing_invite.code,
-                },
-                color_type="error",
-            )
-            await interaction.edit_original_response(embed=error_embed)
-            return
+            # Check if the invite is disabled - if so, allow creating a new one
+            if existing_invite.status != "disabled":
+                cmd_logger.warning(
+                    f"User {target_user.display_name} already has an active invite code: {existing_invite.code}"
+                )
+                error_embed = create_embed(
+                    title_key="trial_invite.error_already_exists_title",
+                    description_key="trial_invite.error_already_exists_desc",
+                    description_kwargs={
+                        "user_mention": target_user.mention,
+                        "existing_code": existing_invite.code,
+                    },
+                    color_type="error",
+                )
+                await interaction.edit_original_response(embed=error_embed)
+                return
+            else:
+                cmd_logger.info(
+                    f"User {target_user.display_name} has a disabled invite. Creating a new one."
+                )
 
         # --- Get Configuration ---
         cmd_logger.debug("Fetching invite configuration settings.")
