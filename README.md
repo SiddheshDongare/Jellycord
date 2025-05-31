@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/logo.jpg" alt="Jellycord Logo" width="200"/>
+  <img src="data/images/logo.jpg" alt="Jellycord Logo" width="200"/>
 </p>
 
 # Jellycord: A JFA-GO Companion Bot
@@ -59,61 +59,54 @@ Jellycord is a highly configurable Discord bot designed as a companion app to in
     cd Jellycord # Or your chosen directory name
     ```
 
-2.  **Create a virtual environment (Recommended):**
+2.  **Navigate to the source directory:**
+    This project now uses a `src` directory for its main codebase.
     ```bash
-    python -m venv venv
-    # Activate the virtual environment
-    # Windows (Command Prompt/PowerShell)
-    venv\Scripts\activate
-    # Linux/macOS
-    source venv/bin/activate
+    cd src # Or your chosen directory name if you cloned into a subdirectory
     ```
 
-3.  **Install dependencies:**
+3.  **Create a virtual environment (Recommended, from within the `src` directory or project root):**
+    If you are in the project root:
+    ```bash
+    python -m venv .venv
+    # Activate the virtual environment
+    # Windows (Command Prompt/PowerShell)
+    .venv\Scripts\activate
+    # Linux/macOS
+    source .venv/bin/activate
+    ```
+    If you `cd src` first, adjust paths accordingly or create venv in root.
+
+4.  **Install dependencies (from the project root where `requirements.txt` is):**
     ```bash
     pip install -r requirements.txt
     ```
 
-4.  **Configure the Bot:**
+5.  **Configure the Bot:**
 
+    *   **Configuration Directory:** All configuration files now reside in the `config/` directory in the project root.
     *   **Example Files:**
-        Copy `config.yaml.example` to `config.yaml`.
-        Copy `message_templates.json.example` to `message_templates.json` (if you plan to customize messages, otherwise the defaults embedded in the example are a good start).
+        Copy `config/config.yaml.example` to `config/config.yaml`.
+        Copy `config/message_templates.json.example` to `config/message_templates.json`.
 
-    *   **Primary Configuration (`config.yaml`):**
-        This file is the main hub for tailoring the bot. Edit `config.yaml` to set your JFA-GO connection details (excluding secrets), Discord server IDs, roles, channels, command parameters (like invite durations, label formats), notification settings, and paths to other configuration files. Detailed comments within `config.yaml.example` explain each option.
+    *   **Primary Configuration (`config/config.yaml`):**
+        Edit `config/config.yaml`. Detailed comments within `config/config.yaml.example` explain each option.
 
     *   **Secrets & Environment-Specific Overrides (`.env` file):**
-        Create a `.env` file in the project root for secrets (e.g., Discord token, JFA-GO password) and environment-specific overrides.
-        Environment variables take precedence over `config.yaml` values.
-        The effective configuration is determined by loading `config.yaml` first, then applying any overriding environment variables.
-        New-style environment variables match the YAML structure (e.g., `JFA_GO_USERNAME` for `jfa_go.username`, `BOT_SETTINGS_DEBUG_MODE` for `bot_settings.debug_mode`).
-
-        Example `.env` file:
-        ```dotenv
-        # Discord Bot Token (Required - Secret)
-        DISCORD_TOKEN="YOUR_DISCORD_BOT_TOKEN"
-
-        # JFA-GO API Configuration (Secrets - Recommended here)
-        JFA_GO_USERNAME="YOUR_JFA_GO_ADMIN_USERNAME"
-        JFA_GO_PASSWORD="YOUR_JFA_GO_ADMIN_PASSWORD"
-
-        # Optional: Override a setting from config.yaml using new style
-        # BOT_SETTINGS_DEBUG_MODE="true"
-        # (Corresponds to bot_settings.debug_mode in YAML)
-        ```
+        Create a `.env` file in the project root.
         Place critical secrets like `DISCORD_TOKEN`, `JFA_GO_USERNAME`, and `JFA_GO_PASSWORD` in `.env`.
 
-    *   **Message Customization (`message_templates.json`):**
-        Edit `message_templates.json` to change any bot output: messages, embed titles, field names, colors, etc. The path is set in `config.yaml` (`message_settings.templates_file`).
+    *   **Message Customization (`config/message_templates.json`):**
+        Edit `config/message_templates.json` to change any bot output. The path is set in `config/config.yaml` (`message_settings.templates_file`, which should default to or be set to `config/message_templates.json`).
 
 ## Running the Bot
 
 ### Directly with Python
 
-Ensure your virtual environment is activated and `config.yaml` (and `.env`) are configured.
+Ensure your virtual environment is activated and `config/config.yaml` (and `.env` in the project root) are configured.
+Run from the project root:
 ```bash
-python main.py
+python src/main.py
 ```
 
 ### Using Docker
@@ -130,43 +123,61 @@ A pre-built image is available on Docker Hub: [sidikulous/jellycord:latest](http
         mkdir ~/jellycord_bot_data
         cd ~/jellycord_bot_data
         ```
-    *   Inside this directory, create subdirectories for the database and logs:
+    *   Inside this directory, create subdirectories for the database and logs if you plan to map them from the host:
         ```bash
-        mkdir bot_data_db
-        mkdir bot_data_logs
+        mkdir my_bot_db
+        mkdir my_bot_logs
         ```
         Ensure these directories have the correct permissions for the Docker user/group to write to them.
-    *   Place your `config.yaml` and `.env` file (containing secrets like `DISCORD_TOKEN`, `JFA_GO_USERNAME`, `JFA_GO_PASSWORD`) in the `~/jellycord_bot_data` directory.
-    *   If you are customizing messages, also place your `message_templates.json` in this directory.
+    *   Place your `config.yaml` and `.env` file (containing secrets) in the `~/jellycord_bot_data` directory. Create a `config` subdirectory within `~/jellycord_bot_data` and place your `config.yaml` and `message_templates.json` there.
+        ```bash
+        # Example structure in ~/jellycord_bot_data
+        # .
+        # |-- .env
+        # |-- config/
+        # |   |-- config.yaml
+        # |   `-- message_templates.json (if customized)
+        # |-- my_bot_db/
+        # `-- my_bot_logs/
+        ```
 
-2.  **Configure Paths in `config.yaml`:**
-    Update your `config.yaml` to reflect the paths *inside the container* where the data and log directories will be mounted. The provided `docker run` command below mounts `bot_data_db` to `/app/data_db` and `bot_data_logs` to `/app/data_logs`.
-    Therefore, your `config.yaml` should have entries like:
+2.  **Configure Paths in `config.yaml` (inside `~/jellycord_bot_data/config/config.yaml`):**
+    Update your `config.yaml` to reflect the paths *inside the container*.
+    The Docker run command below mounts:
+    * Host `~/jellycord_bot_data/config/config.yaml` to Container `/app/config/config.yaml`
+    * Host `~/jellycord_bot_data/config/message_templates.json` to Container `/app/config/message_templates.json`
+    * Host `~/jellycord_bot_data/my_bot_db` to Container `/app/data/db`
+    * Host `~/jellycord_bot_data/my_bot_logs` to Container `/app/logs`
+
+    Therefore, your `config.yaml` (the one on your host at `~/jellycord_bot_data/config/config.yaml`) should use these *container-relative* paths:
     ```yaml
     bot_settings:
       # ... other bot_settings ...
-      db_file_name: "data_db/jellycord.db"  # Or your chosen db filename inside data_db
-      log_file_name: "data_logs/jellycord.log" # Or your chosen log filename inside data_logs
+      db_file_name: "data/db/jellycord.db"      # Path inside the container
+      log_file_name: "logs/jellycord.log"       # Path inside the container
+      # ...
+    message_settings:
+      templates_file: "config/message_templates.json" # Path inside the container
       # ...
     ```
 
 3.  **Run the Docker container:**
     From your dedicated directory (`~/jellycord_bot_data` in this example), run the following command:
     ```bash
-    docker run -d \\
-      --name jellycord \\
-      --env-file .env \\
-      -v "$(pwd)/config.yaml:/app/config.yaml:ro" \\
-      -v "$(pwd)/message_templates.json:/app/message_templates.json:ro" \\
-      -v "$(pwd)/bot_data_db:/app/data_db" \\
-      -v "$(pwd)/bot_data_logs:/app/data_logs" \\
+    docker run -d \
+      --name jellycord \
+      --env-file .env \
+      -v "$(pwd)/config/config.yaml:/app/config/config.yaml:ro" \
+      -v "$(pwd)/config/message_templates.json:/app/config/message_templates.json:ro" \
+      -v "$(pwd)/my_bot_db:/app/data/db" \
+      -v "$(pwd)/my_bot_logs:/app/logs" \
       sidikulous/jellycord:latest
     ```
-    *   `--env-file .env`: Passes your secrets to the container.
-    *   `-v "$(pwd)/config.yaml:/app/config.yaml:ro"`: Mounts your `config.yaml` as read-only.
-    *   `-v "$(pwd)/message_templates.json:/app/message_templates.json:ro"`: Mounts your `message_templates.json` as read-only (optional, if used).
-    *   `-v "$(pwd)/bot_data_db:/app/data_db"`: Mounts your local database directory to `/app/data_db` inside the container. The bot will write its database file here.
-    *   `-v "$(pwd)/bot_data_logs:/app/data_logs"`: Mounts your local logs directory to `/app/data_logs` inside the container. The bot will write its log files here.
+    *   `--env-file .env`: Passes your secrets from `~/jellycord_bot_data/.env` to the container.
+    *   `-v "$(pwd)/config/config.yaml:/app/config/config.yaml:ro"`: Mounts your host `config.yaml`.
+    *   `-v "$(pwd)/config/message_templates.json:/app/config/message_templates.json:ro"`: Mounts your host `message_templates.json`.
+    *   `-v "$(pwd)/my_bot_db:/app/data/db"`: Mounts your host database directory.
+    *   `-v "$(pwd)/my_bot_logs:/app/logs"`: Mounts your host logs directory.
     *   `-d`: Runs the container in detached mode.
     *   `sidikulous/jellycord:latest`: Specifies the image to use.
 
@@ -182,13 +193,13 @@ A pre-built image is available on Docker Hub: [sidikulous/jellycord:latest](http
     Follow the same steps 1 and 2 from the "Pre-built Image" section to prepare your host environment and configure `config.yaml`. Then, run the container using your locally built image name:
     ```bash
     # Ensure you are in your dedicated directory (e.g., ~/jellycord_bot_data)
-    docker run -d \\
-      --name jellycord \\
-      --env-file .env \\
-      -v "$(pwd)/config.yaml:/app/config.yaml:ro" \\
-      -v "$(pwd)/message_templates.json:/app/message_templates.json:ro" \\
-      -v "$(pwd)/bot_data_db:/app/data_db" \\
-      -v "$(pwd)/bot_data_logs:/app/data_logs" \\
+    docker run -d \
+      --name jellycord \
+      --env-file .env \
+      -v "$(pwd)/config/config.yaml:/app/config/config.yaml:ro" \
+      -v "$(pwd)/config/message_templates.json:/app/config/message_templates.json:ro" \
+      -v "$(pwd)/my_bot_db:/app/data/db" \
+      -v "$(pwd)/my_bot_logs:/app/logs" \
       jellycord-bot # Use your local image name
     ```
 
@@ -228,30 +239,30 @@ To update Jellycord to the latest version when using a pre-built Docker image:
 
     Navigate to your dedicated bot directory (e.g., `~/jellycord_bot_data`) and execute:
     ```bash
-    docker run -d \\
-      --name jellycord \\
-      --env-file .env \\
-      -v "$(pwd)/config.yaml:/app/config.yaml:ro" \\
-      -v "$(pwd)/message_templates.json:/app/message_templates.json:ro" \\
-      -v "$(pwd)/bot_data_db:/app/data_db" \\
-      -v "$(pwd)/bot_data_logs:/app/data_logs" \\
+    docker run -d \
+      --name jellycord \
+      --env-file .env \
+      -v "$(pwd)/config/config.yaml:/app/config/config.yaml:ro" \
+      -v "$(pwd)/config/message_templates.json:/app/config/message_templates.json:ro" \
+      -v "$(pwd)/my_bot_db:/app/data/db" \
+      -v "$(pwd)/my_bot_logs:/app/logs" \
       sidikulous/jellycord:latest
     ```
     Your existing database and logs will be used by the updated bot.
 
-    *   Ensure the `db_file_name` and `log_file_name` paths in `config.yaml` correctly point to locations within the mounted volumes (e.g., `data_db/your_database.db`, `data_logs/your_log.log`).
+    *   Ensure the `db_file_name` (`data/db/your_database.db`), `log_file_name` (`logs/your_log.log`), and `templates_file` (`config/message_templates.json`) paths in your host's `config/config.yaml` correctly point to locations that align with the container's perspective, as configured by the volume mounts.
 
 ## Configuration Explained
 
-Configuration is primarily managed via `config.yaml`. Environment variables can override these settings. Refer to `config.yaml.example` for a comprehensive list of options.
+Configuration is primarily managed via `config/config.yaml`. Environment variables can override these settings. Refer to `config/config.yaml.example` for a comprehensive list of options.
 
-Key sections in `config.yaml`:
+Key sections in `config/config.yaml`:
 
 *   **`bot_settings`**: General bot settings (name, log file, database file, debug mode).
 *   **`discord`**: Discord-specific settings (token, guild ID, admin log channel, authorized roles/channels for commands, role for trial users, notification channel and timings).
 *   **`jfa_go`**: JFA-GO connection details (base URL, username, password - ideally set in `.env`, default trial profile).
 *   **`invite_settings`**: Global settings for invite generation (base URL for invite links, default link validity, trial account duration, label formats for trial/paid invites, JFA-GO profile to Discord role mapping for paid invites).
-*   **`message_settings`**: Path to `message_templates.json`, default embed colors, default embed footer text (can use `{bot_name}` placeholder), and the bot's display name used in messages.
+*   **`message_settings`**: Path to `config/message_templates.json`, default embed colors, default embed footer text (can use `{bot_name}` placeholder), and the bot's display name used in messages.
 *   **`notification_settings`**: Configuration for user expiry notifications (how far ahead to check for expiries, how often to send the same notification, and on which specific days before expiry to notify).
 *   **`commands`**: Fine-grained settings for specific commands:
     *   `create_trial_invite`: Override JFA-GO user expiry, label format, and assigned Discord role for trial invites.
@@ -261,16 +272,18 @@ Key sections in `config.yaml`:
 
 ## Module Breakdown
 
-*   **`main.py`**: Entry point; initializes logging, configuration, the bot instance, registers handlers, and runs the bot.
-*   **`config.py`**: Loads and validates configuration from `config.yaml` and environment variables. Provides the `get_config_value()` helper. Does *not* export flat variables anymore.
-*   **`logging_setup.py`**: Configures application-wide logging.
-*   **`messaging.py`**: Loads `message_templates.json` and provides `get_message()`, `create_embed()`, and `get_bot_display_name()` helpers.
-*   **`models.py`**: Defines data classes (e.g., `InviteInfo`, `AdminAction`).
-*   **`database.py`**: Manages SQLite database interactions.
-*   **`jfa_client.py`**: Handles all communication with the JFA-GO API.
-*   **`bot.py`**: Defines the main `JfaGoBot` class, handles event processing, command tree setup, and core bot logic like admin logging and the expiry notification background task.
-*   **`modules/commands/`**: Sub-package for command definitions:
-    *   `auth.py`: Authorization decorator (`is_in_support_and_authorized()`).
+The project is structured with a `src/` directory containing the core application code.
+
+*   **`src/main.py`**: Entry point; initializes logging, configuration, the bot instance, registers handlers, and runs the bot.
+*   **`src/modules/config.py`**: Loads and validates configuration from `config/config.yaml` and environment variables.
+*   **`src/modules/logging_setup.py`**: Configures application-wide logging (output to `logs/`).
+*   **`src/modules/messaging.py`**: Loads `config/message_templates.json` and provides message/embed helpers.
+*   **`src/modules/models.py`**: Defines data classes.
+*   **`src/modules/database.py`**: Manages SQLite database interactions (database stored in `data/db/`).
+*   **`src/modules/jfa_client.py`**: Handles all communication with the JFA-GO API.
+*   **`src/modules/bot.py`**: Defines the main `JfaGoBot` class, event handling, command tree, and background tasks.
+*   **`src/modules/commands/`**: Sub-package for command definitions.
+    *   `auth.py`: Authorization decorators.
     *   `invite_commands.py`: Logic for `/create-trial-invite`.
     *   `user_invite_commands.py`: Logic for `/create-user-invite`.
     *   `admin_commands.py`: Logic for `/remove_invite` and `/extend-plan`.
@@ -285,19 +298,19 @@ Once the bot is running and configured:
 4.  Available slash commands (exact behavior and output are configurable):
     *   `/create-trial-invite`: Creates a trial invite for a user in the current channel/thread (user is auto-detected).
         <p align="center">
-          <img src="images/create_trial_invite_command.png" alt="Create Trial Invite Command Screenshot" width="600"/>
+          <img src="data/images/create_trial_invite_command.png" alt="Create Trial Invite Command Screenshot" width="600"/>
         </p>
     *   `/create-user-invite [user] [plan_type] [months (optional)] [days (optional)]`: Creates a user invite for a specified Discord user, assigning them to a JFA-GO plan.
         <p align="center">
-          <img src="images/create_user_invite_command.png" alt="Create User Invite Command Screenshot" width="600"/>
+          <img src="data/images/create_user_invite_command.png" alt="Create User Invite Command Screenshot" width="600"/>
         </p>
     *   `/remove_invite [user_identifier]`: Identifies a user by Discord mention/ID or Jellyfin username. Attempts to delete the user from JFA-GO, delete their associated JFA-GO invite code, and sets their invite status to 'disabled' in Jellycord's local database. It also attempts to revert their Discord roles.
         <p align="center">
-          <img src="images/remove_invite_command.png" alt="Remove Invite Command Screenshot" width="600"/>
+          <img src="data/images/remove_invite_command.png" alt="Remove Invite Command Screenshot" width="600"/>
         </p>
     *   `/extend-plan [user] [jfa_username] [months/days/hours/minutes (at least one required)] [reason (optional)] [notify (optional)]`: Extends a user's JFA-GO plan.
         <p align="center">
-          <img src="images/extend_plan_command.png" alt="Extend Plan Command Screenshot" width="600"/>
+          <img src="data/images/extend_plan_command.png" alt="Extend Plan Command Screenshot" width="600"/>
         </p>
 
 ## Contributing
