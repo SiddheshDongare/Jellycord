@@ -14,11 +14,9 @@ __pycache__/
 *.pyd
 .ruff_cache
 
-modules/__pycache__
-modules/commands/__pycache__
+*__pycache__
 
 # Other files and folders
-memory-bank
-.cursor
 config.yaml
 PROJECT.md
+.cursor

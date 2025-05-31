@@ -1,0 +1,115 @@
+# Configuration for the JFA-GO Discord Bot
+# Copy this file to config.yaml and edit it with your settings.
+
+bot_settings:
+  # Name of the bot, used in logging and potentially display.
+  bot_name: "JFA-GO Invite Bot"
+  # Log file name
+  log_file_name: "jfa_bot.log"
+  # Database file name
+  db_file_name: "jfa_bot.db"
+  # Debug mode for verbose logging (true/false)
+  debug_mode: false
+  log_level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+discord:
+  # Your Discord Bot Token (Keep this secret! Recommended to set via environment variable DISCORD_TOKEN)
+  token: "YOUR_DISCORD_BOT_TOKEN"
+  # ID of the Discord Server (Guild) where commands will be registered
+  guild_id: "YOUR_DISCORD_SERVER_ID"
+  # ID of the channel where admin actions are logged
+  admin_log_channel_id: "YOUR_ADMIN_LOG_CHANNEL_ID"
+  # List of role names or IDs that are allowed to use bot commands
+  # Example: command_authorized_roles: ["Support Staff", "Admin", "123456789012345678"]
+  command_authorized_roles: ["Support Staff", "Admin"]
+  # List of Discord Category IDs or Channel IDs where commands can be used.
+  # Example: command_channel_ids: ["CATEGORY_ID_1", "CHANNEL_ID_1"]
+  command_channel_ids: ["YOUR_SUPPORT_CATEGORY_ID_OR_CHANNEL_ID"]
+  # Name of the Discord role to assign to users for trial invites. Leave empty if no role should be assigned.
+  trial_user_role_name: "Trial"
+  # ID of the Discord channel where expiry notification summaries will be sent.
+  # If not set, summaries will only be logged to console.
+  notification_channel_id: "YOUR_NOTIFICATION_SUMMARY_CHANNEL_ID" # Example: "123456789012345679"
+
+jfa_go:
+  # Base URL of your JFA-GO instance (e.g., http://localhost:8096 or https://your.jfa-go.domain)
+  base_url: "http://localhost:8096" # Replace with your JFA-GO URL
+  # JFA-GO Admin Username (Keep this secret! Recommended to set via environment variable JFA_GO_USERNAME)
+  username: "YOUR_JFA_GO_ADMIN_USERNAME"
+  # JFA-GO Admin Password (Keep this secret! Recommended to set via environment variable JFA_GO_PASSWORD)
+  password: "YOUR_JFA_GO_ADMIN_PASSWORD"
+  # Default JFA-GO profile to use for trial invites if not specified otherwise by command settings.
+  default_trial_profile: "Default Profile" # Or whatever your default trial profile is named in JFA-GO
+
+invite_settings:
+  # Base URL that will be prepended to the generated JFA-GO invite code (e.g., https://jellyfin.example.com/invite/)
+  # Ensure this ends with a trailing slash if JFA-GO generates only the code part.
+  invite_link_base_url: "https://your.jellyfin.server/invite/" # Replace with your invite base URL
+  # Default number of days an invite *link* is valid. Can be overridden by command-specific settings.
+  link_validity_days: 1
+  # Default number of days a trial *user account* is valid (for /create-trial-invite). Can be overridden.
+  trial_account_duration_days: 3
+  # Format string for JFA-GO invite labels for trial invites.
+  # Placeholders: {discord_username}, {discord_user_id}, {date}, {time}, {datetime}
+  trial_invite_label_format: "{discord_username}-Trial-{date}"
+  # Format string for JFA-GO invite labels for paid invites.
+  # Placeholders: {discord_username}, {discord_user_id}, {plan_name}, {date}, {time}, {datetime}
+  paid_invite_label_format: "{discord_username}-{plan_name}-{date}"
+
+message_settings: # Settings for message templates and embed appearances
+  # Path to the message templates file (e.g., message_templates.json)
+  templates_file: "message_templates.json"
+  # Default embed colors (hex format, e.g., "0xRRGGBB")
+  embed_colors:
+    success: "0x28a745"
+    error: "0xdc3545"
+    info: "0x17a2b8"
+    warning: "0xffc107"
+  # Default footer text for embeds. Can use {bot_name}.
+  embed_footer_text: "Powered by {bot_name}"
+  # Display name for the bot in messages, if different from bot_settings.bot_name or Discord bot name.
+  # Used in {bot_name} placeholder in templates and default footer.
+  bot_display_name_in_messages: "JFA-GO Bot"
+
+notification_settings: # Settings for user account expiry notifications
+  # How many days in advance (from today) to fetch users for expiry checks.
+  # E.g., 4 means users expiring in the next 4 days will be considered.
+  expiry_check_fetch_days: 4
+  # Minimum interval in days between sending the same type of notification to the same user.
+  expiry_notification_interval_days: 2
+  # Specific days before expiry to send a DM notification (e.g., [3, 0] for 3 days before and on expiry day).
+  # The notification task runs periodically (e.g. every 6 hours in bot.py), so it aims to catch these days.
+  notification_days_before_expiry: [3, 0] # Example: Notify 3 days before and on the day of expiry.
+
+sync_settings: # Settings for JFA-GO data synchronization tasks
+  # How often (in hours) to sync the JFA-GO user list with the local cache.
+  jfa_user_sync_interval_hours: 12
+
+commands: # Command-specific configurations
+  create_trial_invite:
+    # Duration in days for the JFA-GO user account created by a trial invite.
+    jfa_user_expiry_days: 3
+    # Label format for JFA-GO. Placeholders: {user_name}, {date}, {time}, {datetime}
+    # {user_name} refers to the target Discord user's display name.
+    jfa_invite_label_format: "Trial - {user_name} - {date}"
+    # Name of the Discord role to assign upon successful trial invite creation.
+    # This should match the global `discord.trial_user_role_name` if you want consistency.
+    assign_role_name: "Trial" # Example, ensure this matches discord.trial_user_role_name if intended to be the same
+
+  create_user_invite:
+    # How many days a user invite *link* is valid.
+    link_validity_days: 7
+    # Mapping of JFA-GO Plan Names (as defined in JFA-GO) to Discord Role Names or IDs.
+    # This is used to assign/manage Discord roles when a user invite is created.
+    # Ensure the JFA-GO Plan Name (key) is exactly as it appears in JFA-GO.
+    # Ensure the Discord Role Name/ID (value) is correct for your server.
+    plan_to_role_map:
+      "Ultimate JFA Plan": "Ultimate Discord Role"
+      "Premium JFA Plan": "Premium Discord Role"
+      "Standard JFA Plan": "123456789012345678" # Example using Role ID
+      # "Another JFA Plan": "Corresponding Discord Role"
+    # trial_role_name: "Trial User" # DEPRECATED: The trial role to be removed is now implicitly discord.trial_user_role_name.
+                                  # The bot ensures discord.trial_user_role_name is assigned if not present.
+
+# Note: Ensure JFA-GO related names (profiles, plans) in this config exactly match
+# how they are named within your JFA-GO application.
