@@ -195,7 +195,27 @@ async def create_user_invite_command(
             existing_invite_info_params = {}
 
         # --- Create Invite ---
-        label = f"{user.display_name} - {plan_type} - {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')}"
+        # Get configured label format
+        invite_label_format = get_config_value(
+            "invite_settings.paid_invite_label_format",
+            "{discord_username}-{plan_name}-{date}",
+        )
+
+        # Create invite label using format
+        try:
+            label = invite_label_format.format(
+                discord_username=user.display_name,
+                plan_name=plan_type,
+                date=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+            )
+        except KeyError as e:
+            cmd_logger.error(f"Invalid placeholder in paid invite label format: {e}")
+            await interaction.followup.send(
+                f"❌ Configuration Error: Invalid placeholder in paid invite label format: {e}. Please check `invite_settings.paid_invite_label_format` in config.",
+                ephemeral=True,
+            )
+            return
+
         cmd_logger.info(
             f"Attempting to create user invite via JFA-GO with label: {label}, plan: {plan_type}, user_days: {total_user_days}, invite_days: {invite_duration_days}"
         )
@@ -292,7 +312,6 @@ async def create_user_invite_command(
         # --- Role Management ---
         assigned_roles_messages = []
         removed_roles_messages = []
-        trial_role_assigned_during_paid_flow = False
 
         # Get configured trial role name
         trial_role_name_config = get_config_value("discord.trial_user_role_name")
@@ -370,7 +389,6 @@ async def create_user_invite_command(
 
         # Assign new role based on plan_to_role_map
         new_role_name_or_id = plan_role_map.get(plan_type)
-        new_role_assigned = False
         if new_role_name_or_id:
             new_role = discord.utils.get(
                 interaction.guild.roles, name=str(new_role_name_or_id)
@@ -396,7 +414,6 @@ async def create_user_invite_command(
                         action_details_parts.append(
                             f"Assigned plan role: {new_role.name}."
                         )
-                        new_role_assigned = True
                     except discord.Forbidden:
                         assigned_roles_messages.append(
                             get_message(
@@ -420,7 +437,6 @@ async def create_user_invite_command(
                     action_details_parts.append(
                         f"User already had plan role: {new_role.name}."
                     )
-                    new_role_assigned = True  # Considered assigned for logic purposes
             else:
                 assigned_roles_messages.append(
                     get_message(
@@ -452,7 +468,6 @@ async def create_user_invite_command(
                     action_details_parts.append(
                         f"Assigned trial role: {trial_role_obj.name}."
                     )
-                    trial_role_assigned_during_paid_flow = True
                 except discord.Forbidden:
                     assigned_roles_messages.append(
                         get_message(
@@ -476,9 +491,6 @@ async def create_user_invite_command(
                 )
                 action_details_parts.append(
                     f"User already had trial role: {trial_role_obj.name}."
-                )
-                trial_role_assigned_during_paid_flow = (
-                    True  # User has it, counts as success for this check
                 )
         elif trial_role_name_config:  # Configured but not found
             assigned_roles_messages.append(

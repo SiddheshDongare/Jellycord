@@ -89,9 +89,6 @@ commands: # Command-specific configurations
   create_trial_invite:
     # Duration in days for the JFA-GO user account created by a trial invite.
     jfa_user_expiry_days: 3
-    # Label format for JFA-GO. Placeholders: {user_name}, {date}, {time}, {datetime}
-    # {user_name} refers to the target Discord user's display name.
-    jfa_invite_label_format: "Trial - {user_name} - {date}"
     # Name of the Discord role to assign upon successful trial invite creation.
     # This should match the global `discord.trial_user_role_name` if you want consistency.
     assign_role_name: "Trial" # Example, ensure this matches discord.trial_user_role_name if intended to be the same

@@ -79,13 +79,8 @@ DEFAULT_CONFIG_STRUCTURE = {
         "link_validity_days": 1,
         "trial_account_duration_days": 3,
         "trial_invite_label_format": "{discord_username}-Trial-{date}",
-        "user_invite_label_format": "{discord_username}-{plan_name}-{date}",
         "jfa_profile_to_discord_role_mapping": {},
-        "paid_invite_label_format": (
-            str,
-            False,
-            "{discord_username}-{plan_name}-{date}",
-        ),
+        "paid_invite_label_format": "{discord_username}-{plan_name}-{date}",
     },
     "message_settings": {
         "templates_file": DEFAULT_TEMPLATES_FILE_PATH,
@@ -110,7 +105,6 @@ DEFAULT_CONFIG_STRUCTURE = {
     "commands": {
         "create_trial_invite": {
             "jfa_user_expiry_days": 3,
-            "jfa_invite_label_format": "Trial - {user_name} - {date}",
             "assign_role_name": "Trial",
         },
         "create_user_invite": {
@@ -159,11 +153,6 @@ EXPECTED_CONFIG: Dict[str, Tuple[type, bool, Any]] = {
         False,
         "{discord_username}-Trial-{date}",
     ),
-    "invite_settings.user_invite_label_format": (
-        str,
-        False,
-        "{discord_username}-{plan_name}-{date}",
-    ),
     "invite_settings.jfa_profile_to_discord_role_mapping": (dict, False, {}),
     "invite_settings.paid_invite_label_format": (
         str,
@@ -191,11 +180,6 @@ EXPECTED_CONFIG: Dict[str, Tuple[type, bool, Any]] = {
         12,
     ),  # New expected config
     "commands.create_trial_invite.jfa_user_expiry_days": (int, False, 3),
-    "commands.create_trial_invite.jfa_invite_label_format": (
-        str,
-        False,
-        "Trial - {user_name} - {date}",
-    ),
     "commands.create_trial_invite.assign_role_name": (
         str,
         False,
